@@ -21,6 +21,14 @@ def make_pdf(path, text):
     page.save()
 
 
+def make_multipage_pdf(path, texts):
+    page = canvas.Canvas(path)
+    for text in texts:
+        page.drawString(72, 720, text)
+        page.showPage()
+    page.save()
+
+
 def make_docx(path, text):
     with zipfile.ZipFile(path, 'w') as archive:
         archive.writestr(
@@ -61,4 +69,20 @@ def pdf_file(tmp_path):
 def docx_file(tmp_path):
     path = tmp_path / 'sample.docx'
     make_docx(str(path), 'banana bread recipe')
+    return str(path)
+
+
+@pytest.fixture
+def multipage_pdf_file(tmp_path):
+    path = tmp_path / 'multipage.pdf'
+    make_multipage_pdf(str(path), ['apple on page one', 'apple on page two also', 'nothing relevant here'])
+    return str(path)
+
+
+@pytest.fixture
+def split_phrase_pdf_file(tmp_path):
+    # "grape juice" spans the page break: page 1 ends with "grape", page 2
+    # starts with "juice", with no separator pypdfium2 would supply itself.
+    path = tmp_path / 'split.pdf'
+    make_multipage_pdf(str(path), ['this ends with grape', 'juice starts the next page'])
     return str(path)

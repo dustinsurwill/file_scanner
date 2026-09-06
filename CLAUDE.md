@@ -91,6 +91,70 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
   ever moved. Verified: a real onefile build succeeds, `windowIcon().isNull()` is `False` at
   runtime, and the icon was confirmed rendering correctly in the taskbar of a real compiled
   Linux build. Not yet confirmed on real Windows in this session.
+- `self.files` (`QTableWidget`) is both the pre-scan file list and the post-scan results grid —
+  columns get appended onto the same rows, not a separate widget. With sorting enabled, row
+  position no longer equals `file_names` list index, so nothing may capture a row index and trust
+  it later. The fix in place: each row's file path lives in `Qt.ItemDataRole.UserRole`
+  (`FILE_PATH_ROLE`) on its column-0 item, and `self.file_items: dict[str, QTableWidgetItem]` maps
+  file → that item; `item.row()` always reflects the item's *current* visual position, so
+  `handle_scan_result` looks up `self.file_items[result.file].row()` fresh each time rather than
+  trusting a row captured earlier. `remove_files_clicked` reads the file off the row via
+  `FILE_PATH_ROLE` and removes it from `file_names` by value (`list.remove`), never by position.
+  Any new code touching `self.files` must follow the same rule.
+- Sorting is deliberately turned off for the duration of a scan (`scan_files_clicked` /
+  `handle_scan_finished`) — leaving it on would re-sort on every single incoming result (visible
+  row-jumping mid-scan, and O(n² log n) work on the ~9000-file batches this app has hit before).
+  It's re-enabled once the scan finishes. `_add_files` similarly disables sorting for its own bulk
+  insert and restores whatever the setting was before (avoids an O(n log n) resort per appended
+  row).
+- The results-table filter (`self.filter_text` / `_apply_filter`) recomputes row visibility from
+  each row's current cell content every time it runs, rather than tracking anything by row index —
+  this is what keeps it correct regardless of what sorting did to row order, without needing to
+  reason about whether Qt's per-row hidden state follows a row through a sort.
+- PDF page numbers for a match: `scanner.extract_text` concatenates all pages' `pypdfium2` text
+  (inserting one space at each page boundary — pypdfium2 doesn't add one itself, so without it the
+  last word of one page could fuse with the first word of the next) and returns
+  `(text, page_boundaries)`. Matching still happens against one whitespace-collapsed document (so
+  a phrase split across a page break, or a line-wrap, still matches) — `_collapse_with_mapping`
+  additionally returns `index_map`, translating a position in the collapsed text back to the raw
+  text so `bisect.bisect_right(page_boundaries, ...)` can find the page. `.docx`/`.txt` return
+  `page_boundaries=None` (`.docx` pagination is a print-time layout computation, not stored in the
+  file at all; `.txt` has no pages) and their occurrences always report `page=None`.
+- `_all_occurrences` caps collection at `MAX_OCCURRENCES_PER_KEYWORD` (20) and sets `truncated`
+  rather than collecting every match unconditionally — a common word or a pathological regex
+  matching at many/most positions in a large file must not blow up per-file scan time or tooltip
+  size.
+- `export_excel_clicked`'s cell-fill check must test `brush.style() == Qt.BrushStyle.NoBrush`, not
+  `color.isValid() and color.alpha() > 0` — a `QTableWidgetItem` with no background ever set still
+  reports its background color as opaque black (`alpha=255`, a "valid" `QColor`); only the brush
+  *style* actually distinguishes "no background was set" from "black was explicitly set" (this was
+  a real shipped bug: the filename column, which never gets a background, was rendering solid
+  black in every exported `.xlsx`). Confirmed directly with a throwaway `QTableWidgetItem` — don't
+  trust `color.alpha()` for this again.
+- `self.file_occurrences: dict[str, list[list[Occurrence]]]` mirrors `self.file_items` — same
+  reset points (cleared at scan start, populated per-file in `handle_scan_result`, popped in
+  `remove_files_clicked`) — and is what `_ask_export_extra_columns`/`_export_rows` use to offer
+  page-number/snippet columns on export. Keep it in sync wherever `file_items` is touched.
+- `export_results_clicked`/`export_excel_clicked`/`save_keywords_clicked` all call
+  `_ensure_extension` before writing — native save dialogs (particularly on Linux) don't reliably
+  append the filter's extension if the user types a bare filename, so the code must not assume
+  `target_path` already has one. Any future save-file dialog needs the same treatment.
+- `export_excel_clicked` runs every row through `_sanitize_for_xlsx` before `sheet.append(...)` —
+  extracted PDF text can contain characters XML 1.0 forbids outright (control chars, and
+  noncharacters like `U+FFFE`) as decoding/font-substitution garbage, and openpyxl writes cell
+  text straight into XML with no sanitizing of its own. Confirmed directly against a real
+  user-exported file that hit this: the resulting `.xlsx` was corrupt enough that openpyxl
+  couldn't even re-open its own output. This became reachable once snippets (raw extracted text)
+  started flowing into export cells — CSV isn't affected (no XML well-formedness constraint), so
+  the sanitizing only happens in the xlsx path, not in the shared `_export_rows` generator.
+- Match mode (`MatchMode`) has two independent persistence paths, both needed:
+  `_load_match_mode`/`_save_match_mode` (via `QSettings`, alongside display options/geometry —
+  survives an app restart) and the `MATCH_MODE_MARKER_PREFIX` first line in a saved keyword file
+  (survives loading that *specific* file into a session currently in a different mode). Before
+  either existed, saving a keyword list built in Regex mode and loading it back later silently
+  reinterpreted patterns like `\d{4,}` as literal (near-never-matching) substrings — a real
+  shipped bug. A keyword file without the marker line (hand-written, or saved before this existed)
+  intentionally leaves whatever mode is already active alone rather than resetting it.
 
 ## Tests
 - `tests/conftest.py` has an autouse `isolated_qsettings` fixture that monkeypatches
@@ -103,11 +167,18 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
 - GUI tests run headless via `QT_QPA_PLATFORM=offscreen`; CI installs a handful of system Qt
   libraries on `ubuntu-latest` for this (`libglib2.0-0 libegl1 libgl1 libfontconfig1
   libxkbcommon0 libdbus-1-3` — see `.github/workflows/test.yml`).
+- `tests/conftest.py`'s `make_multipage_pdf` (used by the `multipage_pdf_file`/
+  `split_phrase_pdf_file` fixtures) calls `canvas.showPage()` between pages — needed for a
+  genuinely multi-page PDF; `make_pdf`'s single `drawString` call only ever produces one page.
+- `QTableWidget.setSortingEnabled(True)` does not itself trigger a sort — confirmed directly (see
+  a throwaway repro in this session's history): rows stay in insertion order until a header is
+  actually clicked or `sortItems()` is called, even when re-enabling sorting after a bulk insert
+  that had it temporarily off. Don't assume otherwise without checking again if this ever seems to
+  misbehave — it's the kind of Qt behavior that's easy to get backwards from memory.
 
 ## Versioning
 Version is derived from git tags via `setuptools-scm` (see `[tool.setuptools_scm]` in
 `pyproject.toml`) — never hand-edit a version number in the code.
 
 ## Backlog (deliberately deferred, not TODOs to pick up unprompted)
-Session save/load, result snippets/context, sortable/filterable results table, dark-mode
-consistency on Linux, double-click a row to open the file.
+Session save/load, dark-mode consistency on Linux.

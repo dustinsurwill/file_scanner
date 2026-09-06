@@ -8,11 +8,14 @@ from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
-from PyQt6.QtCore import QSettings, QThread, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QIcon
+from PyQt6.QtCore import QSettings, Qt, QThread, QUrl, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -34,6 +37,24 @@ from PyQt6.QtWidgets import (
 from options_dialog import Options
 from scanner import MatchMode, ScanResult, scan_files_process
 
+FILE_PATH_ROLE = Qt.ItemDataRole.UserRole
+# First-line marker in a saved keyword file recording which MatchMode it was
+# authored in - a plain-text keyword like '\d{4,}' is meaningless without
+# knowing it was meant as a regex.
+MATCH_MODE_MARKER_PREFIX = '# match_mode: '
+# Characters XML 1.0 forbids outright - extracted file text (PDFs especially)
+# can contain these as decoding/font-substitution garbage, and openpyxl
+# writes cell text straight into XML with no sanitizing of its own, so an
+# un-stripped one produces a .xlsx that's corrupt (not even openpyxl itself
+# can re-open it - confirmed directly against a real exported file that hit
+# this).
+_ILLEGAL_XML_CODEPOINTS = [*range(0x09), 0x0B, 0x0C, *range(0x0E, 0x20), 0x7F, 0xFFFE, 0xFFFF]
+_ILLEGAL_XML_CHARS_RE = re.compile('[' + re.escape(''.join(chr(c) for c in _ILLEGAL_XML_CODEPOINTS)) + ']')
+
+
+def _sanitize_for_xlsx(values):
+    return [_ILLEGAL_XML_CHARS_RE.sub('', value) for value in values]
+
 # Recycle each worker after this many files so any per-file memory that a
 # parsing library doesn't fully release (observed with pdfminer.six on large
 # PDF batches) can't accumulate across the life of a long-running scan.
@@ -42,6 +63,13 @@ MAX_TASKS_PER_CHILD = 50
 # Nuitka onefile build, where --include-data-files places it at this same
 # relative path inside the runtime extraction directory.
 ICON_PATH = str(Path(__file__).resolve().parent / 'assets' / 'icon.png')
+
+
+def _build_tooltip(occurrences, truncated):
+    lines = [f'p. {occ.page}: {occ.snippet}' if occ.page is not None else occ.snippet for occ in occurrences]
+    if truncated:
+        lines.append(f'…and more matches not shown (showing first {len(occurrences)})')
+    return '\n'.join(lines)
 
 
 class ScanWorker(QThread):
@@ -101,13 +129,15 @@ class FileScanner(QMainWindow):
             # entirely) in case 'windows11' isn't available for some reason.
             QApplication.setStyle(QStyleFactory.create('windows11') or QStyleFactory.create('fusion'))
         self.file_names = []
-        self.file_rows = {}
+        self.file_items = {}
+        self.file_occurrences = {}
         self.scan_errors = []
         self.scan_worker = None
         self.progress_dialog = None
         self.settings = QSettings('file-scanner', 'FileScanner')
         self.options = Options(self)
         self._load_display_options()
+        self._load_match_mode()
         geometry = self.settings.value('window_geometry')
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -142,9 +172,23 @@ class FileScanner(QMainWindow):
         for key in self._DISPLAY_TEXT_KEYS:
             self.settings.setValue(f'display/{key}', getattr(display, key))
 
+    def _load_match_mode(self):
+        value = self.settings.value('match_mode')
+        if not value:
+            return
+        try:
+            mode = MatchMode(value)
+        except ValueError:
+            return
+        self.match_mode_combo.setCurrentIndex(self.match_mode_combo.findData(mode))
+
+    def _save_match_mode(self):
+        self.settings.setValue('match_mode', self._match_mode().value)
+
     def closeEvent(self, event):
         self.settings.setValue('window_geometry', self.saveGeometry())
         self._save_display_options()
+        self._save_match_mode()
         super().closeEvent(event)
 
     def _last_dir(self):
@@ -163,22 +207,37 @@ class FileScanner(QMainWindow):
         self.remove_files.setDisabled(True)
         self.remove_files.clicked.connect(self.remove_files_clicked)
         top_buttons.addWidget(self.remove_files)
+        export_hint = (
+            'Tip: hover a found cell in the results table to see its match snippets and page numbers.'
+        )
         self.export_results = QPushButton('Export to CSV')
         self.export_results.setDisabled(True)
+        self.export_results.setToolTip(export_hint)
         self.export_results.clicked.connect(self.export_results_clicked)
         top_buttons.addWidget(self.export_results)
         self.export_excel = QPushButton('Export to Excel')
         self.export_excel.setDisabled(True)
+        self.export_excel.setToolTip(export_hint)
         self.export_excel.clicked.connect(self.export_excel_clicked)
         top_buttons.addWidget(self.export_excel)
         vertical.addLayout(top_buttons)
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel('Filter:'))
+        self.filter_text = QLineEdit()
+        self.filter_text.setPlaceholderText('Type to filter rows...')
+        self.filter_text.textChanged.connect(self._apply_filter)
+        filter_row.addWidget(self.filter_text)
+        vertical.addLayout(filter_row)
         self.files = QTableWidget()
         self.files.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.files.setAlternatingRowColors(True)
         self.files.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.files.setSortingEnabled(True)
         self.files.itemSelectionChanged.connect(
             lambda: self.remove_files.setDisabled(not self.files.selectedIndexes())
         )
+        self.files.cellDoubleClicked.connect(self._open_file_at_row)
+        self.files.horizontalHeader().sortIndicatorChanged.connect(self._apply_filter)
         self.update_file_headers()
         vertical.addWidget(self.files)
         buttons = QHBoxLayout()
@@ -199,49 +258,111 @@ class FileScanner(QMainWindow):
         vertical.addLayout(buttons)
         return vertical
 
+    @staticmethod
+    def _ensure_extension(path, extension):
+        return path if path.lower().endswith(extension) else path + extension
+
+    @staticmethod
+    def _format_pages(occurrences):
+        return ', '.join(str(occ.page) for occ in occurrences if occ.page is not None)
+
+    @staticmethod
+    def _format_snippets(occurrences):
+        return '; '.join(occ.snippet for occ in occurrences)
+
+    def _ask_export_extra_columns(self):
+        """Returns (include_pages, include_snippets), or None if the user cancelled."""
+        if not self.file_occurrences:
+            return False, False
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Export Options')
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel('This info is also available by hovering a found cell in the results table.'))
+        pages_box = QCheckBox('Include page numbers as extra columns')
+        snippets_box = QCheckBox('Include match snippets as extra columns')
+        layout.addWidget(pages_box)
+        layout.addWidget(snippets_box)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return pages_box.isChecked(), snippets_box.isChecked()
+
+    def _export_rows(self, include_pages, include_snippets):
+        """Yields (header_row, *data_rows) as lists of plain strings, matching self.files'
+        current (possibly sorted/filtered-view-independent - export covers all rows regardless
+        of the filter) row order."""
+        keyword_count = self.keyword_list.count()
+        keywords = self.file_headers[1:]
+        headers = list(self.file_headers)
+        if include_pages:
+            headers += [f'{keyword} (page)' for keyword in keywords]
+        if include_snippets:
+            headers += [f'{keyword} (snippet)' for keyword in keywords]
+        yield headers
+        for row in range(self.files.rowCount()):
+            file = self.files.item(row, 0).data(FILE_PATH_ROLE)
+            occurrences = self.file_occurrences.get(file)
+            values = [self.files.item(row, 0).text()] + [
+                self.files.item(row, i + 1).text() for i in range(keyword_count)
+            ]
+            if include_pages:
+                values += [self._format_pages(occurrences[i]) if occurrences else '' for i in range(keyword_count)]
+            if include_snippets:
+                values += [
+                    self._format_snippets(occurrences[i]) if occurrences else '' for i in range(keyword_count)
+                ]
+            yield values
+
     def export_results_clicked(self):
-        target_path = QFileDialog.getSaveFileName(self, 'Export Results', self._last_dir(), 'Excel (*.csv)')[0]
+        extra_columns = self._ask_export_extra_columns()
+        if extra_columns is None:
+            return
+        target_path = QFileDialog.getSaveFileName(self, 'Export Results', self._last_dir(), 'CSV (*.csv)')[0]
         if not target_path:
             return
+        target_path = self._ensure_extension(target_path, '.csv')
         self._remember_dir(target_path)
         try:
             with open(target_path, 'wt', newline='') as csv_file:
                 csv_writer = writer(csv_file)
-                csv_writer.writerow(self.file_headers)
-                for row in range(self.files.rowCount()):
-                    csv_writer.writerow(
-                        [self.files.item(row, 0).text()]
-                        + [self.files.item(row, i + 1).text() for i in range(self.keyword_list.count())]
-                    )
+                for row_values in self._export_rows(*extra_columns):
+                    csv_writer.writerow(row_values)
         except OSError as exc:
             QMessageBox.critical(self, 'Export Failed', f'Could not write results:\n{exc}')
 
     def export_excel_clicked(self):
+        extra_columns = self._ask_export_extra_columns()
+        if extra_columns is None:
+            return
         target_path = QFileDialog.getSaveFileName(self, 'Export Results', self._last_dir(), 'Excel Workbook (*.xlsx)')[
             0
         ]
         if not target_path:
             return
+        target_path = self._ensure_extension(target_path, '.xlsx')
         self._remember_dir(target_path)
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = 'Results'
-        sheet.append(self.file_headers)
-        for row in range(self.files.rowCount()):
-            values = []
-            fills = []
-            for column in range(self.files.columnCount()):
-                item = self.files.item(row, column)
-                values.append(item.text() if item else '')
-                fills.append(item.background().color() if item else None)
-            sheet.append(values)
-            excel_row = row + 2  # header occupies row 1
-            for column, color in enumerate(fills, start=1):
-                if color is not None and color.isValid() and color.alpha() > 0:
-                    hex_color = color.name(QColor.NameFormat.HexRgb).lstrip('#').upper()
-                    sheet.cell(row=excel_row, column=column).fill = PatternFill(
-                        start_color=hex_color, end_color=hex_color, fill_type='solid'
-                    )
+        rows = self._export_rows(*extra_columns)
+        sheet.append(_sanitize_for_xlsx(next(rows)))
+        keyword_count = self.keyword_list.count()
+        for excel_row, values in enumerate(rows, start=2):
+            sheet.append(_sanitize_for_xlsx(values))
+            # Only the keyword-result columns (not the filename, and not any
+            # extra page/snippet columns) carry a found/missing/error color.
+            for column in range(1, keyword_count + 1):
+                item = self.files.item(excel_row - 2, column)
+                brush = item.background() if item else QBrush()
+                if brush.style() == Qt.BrushStyle.NoBrush:
+                    continue
+                hex_color = brush.color().name(QColor.NameFormat.HexRgb).lstrip('#').upper()
+                sheet.cell(row=excel_row, column=column + 1).fill = PatternFill(
+                    start_color=hex_color, end_color=hex_color, fill_type='solid'
+                )
         try:
             workbook.save(target_path)
         except OSError as exc:
@@ -251,11 +372,13 @@ class FileScanner(QMainWindow):
         target_path = QFileDialog.getSaveFileName(self, 'Save Keywords', self._last_dir(), 'Text (*.txt)')[0]
         if not target_path:
             return
+        target_path = self._ensure_extension(target_path, '.txt')
         self._remember_dir(target_path)
         keywords = [self.keyword_list.item(i).text() for i in range(self.keyword_list.count())]
+        lines = [f'{MATCH_MODE_MARKER_PREFIX}{self._match_mode().value}', *keywords]
         try:
             with open(target_path, 'wt') as keywords_file:
-                keywords_file.write('\n'.join(keywords) + '\n')
+                keywords_file.write('\n'.join(lines) + '\n')
         except OSError as exc:
             QMessageBox.critical(self, 'Save Failed', f'Could not save keywords:\n{exc}')
 
@@ -266,11 +389,24 @@ class FileScanner(QMainWindow):
         self._remember_dir(source_path)
         try:
             with open(source_path, 'rt') as keywords_file:
-                loaded_keywords = [line for line in keywords_file.read().split('\n') if line]
+                lines = [line for line in keywords_file.read().split('\n') if line]
         except OSError as exc:
             QMessageBox.critical(self, 'Load Failed', f'Could not load keywords:\n{exc}')
             return
-        self.keyword_list.addItems(loaded_keywords)
+        # A saved keyword list carries its match mode as an optional marker on
+        # the first line - a plain keyword list (no marker, e.g. hand-written
+        # or saved before this existed) leaves whatever mode is already active
+        # alone rather than resetting it.
+        if lines and lines[0].startswith(MATCH_MODE_MARKER_PREFIX):
+            mode_value = lines[0][len(MATCH_MODE_MARKER_PREFIX):]
+            lines = lines[1:]
+            try:
+                mode = MatchMode(mode_value)
+            except ValueError:
+                mode = None
+            if mode is not None:
+                self.match_mode_combo.setCurrentIndex(self.match_mode_combo.findData(mode))
+        self.keyword_list.addItems(lines)
         self._refresh_keyword_validity_highlighting()
         self.update_file_headers()
         if self.keyword_list.count():
@@ -294,10 +430,14 @@ class FileScanner(QMainWindow):
                         self, 'Invalid Regex', f'Keyword "{keyword}" is not a valid regex pattern:\n{exc}'
                     )
                     return
-        self.file_rows = {file: row for row, file in enumerate(self.file_names)}
         self.scan_errors = []
+        self.file_occurrences = {}
         self.scan_files.setDisabled(True)
         self.add_files.setDisabled(True)
+        # Sorting stays off for the duration of the scan: re-sorting on every
+        # single incoming result would visibly shuffle rows mid-scan and cost
+        # O(n log n) per result on a large batch. Re-enabled once it's done.
+        self.files.setSortingEnabled(False)
         self.progress_dialog = QProgressDialog('Scanning files...', 'Cancel', 0, len(self.file_names), self)
         self.progress_dialog.setWindowTitle('Scanning')
         self.progress_dialog.setMinimumDuration(0)
@@ -309,7 +449,7 @@ class FileScanner(QMainWindow):
         self.scan_worker.start()
 
     def handle_scan_result(self, result: ScanResult):
-        row = self.file_rows[result.file]
+        row = self.file_items[result.file].row()
         if result.error is not None:
             self.scan_errors.append((result.file, result.error))
             for column in range(1, self.files.columnCount()):
@@ -318,9 +458,12 @@ class FileScanner(QMainWindow):
                 widget.setToolTip(result.error)
                 self.files.setItem(row, column, widget)
         else:
+            self.file_occurrences[result.file] = result.occurrences
             for i, has_match in enumerate(result.matches):
                 widget = QTableWidgetItem(self.options.display.found_text if has_match else self.options.display.missing_text)
                 widget.setBackground(self.options.display.found_color if has_match else self.options.display.missing_color)
+                if has_match:
+                    widget.setToolTip(_build_tooltip(result.occurrences[i], result.truncated[i]))
                 self.files.setItem(row, i + 1, widget)
         self.progress_dialog.setValue(self.progress_dialog.value() + 1)
 
@@ -330,6 +473,8 @@ class FileScanner(QMainWindow):
         self.add_files.setDisabled(False)
         self.export_results.setDisabled(False)
         self.export_excel.setDisabled(False)
+        self.files.setSortingEnabled(True)
+        self._apply_filter()
         if self.scan_errors:
             details = '\n'.join(f'{basename(file)}: {error}' for file, error in self.scan_errors)
             QMessageBox.warning(
@@ -400,12 +545,21 @@ class FileScanner(QMainWindow):
     def _add_files(self, files):
         if not files:
             return
+        # Disable sorting during the bulk insert - avoids an O(n log n) resort
+        # per row and any reordering mid-populate; restore + let it resort once.
+        was_sorting = self.files.isSortingEnabled()
+        self.files.setSortingEnabled(False)
         count = self.files.rowCount()
         self.files.setRowCount(count + len(files))
         for i, file in enumerate(files):
             self.file_names.append(file)
-            self.files.setItem(i + count, 0, QTableWidgetItem(basename(file)))
+            item = QTableWidgetItem(basename(file))
+            item.setData(FILE_PATH_ROLE, file)
+            self.files.setItem(i + count, 0, item)
+            self.file_items[file] = item
+        self.files.setSortingEnabled(was_sorting)
         self.update_scan_button_state()
+        self._apply_filter()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -422,10 +576,33 @@ class FileScanner(QMainWindow):
     def remove_files_clicked(self):
         rows = sorted({index.row() for index in self.files.selectedIndexes()}, reverse=True)
         for row in rows:
-            del self.file_names[row]
+            file = self.files.item(row, 0).data(FILE_PATH_ROLE)
+            self.file_names.remove(file)
+            del self.file_items[file]
+            self.file_occurrences.pop(file, None)
             self.files.removeRow(row)
         self.remove_files.setDisabled(True)
         self.update_scan_button_state()
+
+    def _apply_filter(self, *_args):
+        query = self.filter_text.text().strip().lower()
+        for row in range(self.files.rowCount()):
+            if not query:
+                self.files.setRowHidden(row, False)
+                continue
+            matched = any(
+                self.files.item(row, column) is not None and query in self.files.item(row, column).text().lower()
+                for column in range(self.files.columnCount())
+            )
+            self.files.setRowHidden(row, not matched)
+
+    def _open_file_at_row(self, row, _column):
+        item = self.files.item(row, 0)
+        file = item.data(FILE_PATH_ROLE) if item else None
+        if not file or not isfile(file):
+            QMessageBox.warning(self, 'File Not Found', f'{file or "This file"} no longer exists.')
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(file))
 
     def create_keyword_area(self):
         horizontal = QHBoxLayout()
@@ -441,11 +618,18 @@ class FileScanner(QMainWindow):
         vertical = QVBoxLayout()
         vertical.addLayout(horizontal)
         mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel('Match mode:'))
+        # One mode applies to every keyword in the list for the whole scan -
+        # there's no per-keyword mode. Label and tooltip both say so
+        # explicitly; this was a real point of user confusion.
+        match_mode_hint = 'Applies to every keyword in the list below for the whole scan - not set per keyword.'
+        match_mode_label = QLabel('Match mode (all keywords):')
+        match_mode_label.setToolTip(match_mode_hint)
+        mode_row.addWidget(match_mode_label)
         self.match_mode_combo = QComboBox()
         self.match_mode_combo.addItem('Substring', MatchMode.SUBSTRING)
         self.match_mode_combo.addItem('Whole word', MatchMode.WHOLE_WORD)
         self.match_mode_combo.addItem('Regex', MatchMode.REGEX)
+        self.match_mode_combo.setToolTip(match_mode_hint)
         self.match_mode_combo.currentIndexChanged.connect(self._on_match_mode_changed)
         mode_row.addWidget(self.match_mode_combo)
         vertical.addLayout(mode_row)

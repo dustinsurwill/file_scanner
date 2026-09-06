@@ -6,13 +6,20 @@ keywords, showing a found/missing grid you can export to CSV.
 ## Features
 - Add files via a file picker or by dragging them onto the window
 - Remove selected files from the batch without starting over
-- Add/remove/save/load keyword lists
-- Match keywords as a substring, whole word, or regex pattern, with invalid regex patterns
+- Add/remove/save/load keyword lists (a saved list remembers its match mode, so a regex list
+  loads back as regex instead of silently becoming literal substrings)
+- Match keywords as a substring, whole word, or regex pattern - one mode for the whole scan,
+  applied to every keyword in the list, not set per keyword - with invalid regex patterns
   flagged live and blocked from starting a scan
 - Scan runs on a background process pool so the UI stays responsive, with a progress dialog you
   can cancel mid-scan
 - Per-file scan errors (corrupt/unreadable files) are reported without failing the whole batch
-- Export results to CSV or a color-coded `.xlsx` workbook
+- Hover a found cell to see every match as a snippet of surrounding text (with a PDF page number,
+  where the format supports one)
+- Sort results by clicking a column header, or filter rows by typing in the filter box
+- Double-click a row to open that file in its default app
+- Export results to CSV or a color-coded `.xlsx` workbook, optionally with page-number/snippet
+  columns added
 - Customizable found/missing/scan-error colors and labels (Options dialog), persisted across runs
 - Remembers the last-used directory across file dialogs and the window's size/position across runs
 - Has an actual app/taskbar icon instead of the default Qt one
