@@ -2,6 +2,17 @@ import zipfile
 
 import pymupdf
 import pytest
+from PyQt6.QtCore import QSettings
+
+import main_window
+
+
+@pytest.fixture(autouse=True)
+def isolated_qsettings(tmp_path, monkeypatch):
+    ini_path = str(tmp_path / 'settings.ini')
+    monkeypatch.setattr(
+        main_window, 'QSettings', lambda *a, **k: QSettings(ini_path, QSettings.Format.IniFormat)
+    )
 
 
 def make_pdf(path, text):

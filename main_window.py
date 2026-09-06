@@ -2,9 +2,9 @@ import sys
 from _csv import writer
 from functools import partial
 from multiprocessing import cpu_count, get_context
-from os.path import basename
+from os.path import basename, dirname, isfile
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QSettings, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QApplication,
@@ -43,6 +43,7 @@ class ScanWorker(QThread):
         super().__init__(parent)
         self.keywords = keywords
         self.file_names = file_names
+        self._pool = None
 
     def run(self):
         worker_count = min(cpu_count(), len(self.file_names))
@@ -53,9 +54,17 @@ class ScanWorker(QThread):
         # non-main thread in a Qt app.
         context = get_context('spawn')
         with context.Pool(processes=worker_count, maxtasksperchild=MAX_TASKS_PER_CHILD) as pool:
-            for result in pool.imap_unordered(scan, self.file_names):
-                self.result_ready.emit(result)
+            self._pool = pool
+            try:
+                for result in pool.imap_unordered(scan, self.file_names):
+                    self.result_ready.emit(result)
+            except Exception:  # noqa: BLE001, S110 - a cancel-triggered pool.terminate() surfaces here
+                pass
         self.finished_scanning.emit()
+
+    def cancel(self):
+        if self._pool is not None:
+            self._pool.terminate()
 
 
 class FileScanner(QMainWindow):
@@ -72,6 +81,7 @@ class FileScanner(QMainWindow):
         main_layout.setRowMinimumHeight(0, 500)
         self.setCentralWidget(center)
         self.setWindowTitle('File Scanner')
+        self.setAcceptDrops(True)
         if sys.platform == 'win32':
             QApplication.setStyle(QStyleFactory.create('windowsvista'))
         self.file_names = []
@@ -80,6 +90,13 @@ class FileScanner(QMainWindow):
         self.options = Options(self)
         self.scan_worker = None
         self.progress_dialog = None
+        self.settings = QSettings('file-scanner', 'FileScanner')
+
+    def _last_dir(self):
+        return self.settings.value('last_dir', '.')
+
+    def _remember_dir(self, path):
+        self.settings.setValue('last_dir', dirname(path))
 
     def create_files_area(self):
         vertical = QVBoxLayout()
@@ -87,6 +104,10 @@ class FileScanner(QMainWindow):
         self.add_files = QPushButton('Add Files')
         self.add_files.clicked.connect(self.add_files_clicked)
         top_buttons.addWidget(self.add_files)
+        self.remove_files = QPushButton('Remove Files')
+        self.remove_files.setDisabled(True)
+        self.remove_files.clicked.connect(self.remove_files_clicked)
+        top_buttons.addWidget(self.remove_files)
         self.export_results = QPushButton('Export Results')
         self.export_results.setDisabled(True)
         self.export_results.clicked.connect(self.export_results_clicked)
@@ -95,6 +116,10 @@ class FileScanner(QMainWindow):
         self.files = QTableWidget()
         self.files.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.files.setAlternatingRowColors(True)
+        self.files.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.files.itemSelectionChanged.connect(
+            lambda: self.remove_files.setDisabled(not self.files.selectedIndexes())
+        )
         self.update_file_headers()
         vertical.addWidget(self.files)
         buttons = QHBoxLayout()
@@ -116,9 +141,10 @@ class FileScanner(QMainWindow):
         return vertical
 
     def export_results_clicked(self):
-        target_path = QFileDialog.getSaveFileName(self, 'Export Results', '.', 'Excel (*.csv)')[0]
+        target_path = QFileDialog.getSaveFileName(self, 'Export Results', self._last_dir(), 'Excel (*.csv)')[0]
         if not target_path:
             return
+        self._remember_dir(target_path)
         try:
             with open(target_path, 'wt', newline='') as csv_file:
                 csv_writer = writer(csv_file)
@@ -132,9 +158,10 @@ class FileScanner(QMainWindow):
             QMessageBox.critical(self, 'Export Failed', f'Could not write results:\n{exc}')
 
     def save_keywords_clicked(self):
-        target_path = QFileDialog.getSaveFileName(self, 'Save Keywords', '.', 'Text (*.txt)')[0]
+        target_path = QFileDialog.getSaveFileName(self, 'Save Keywords', self._last_dir(), 'Text (*.txt)')[0]
         if not target_path:
             return
+        self._remember_dir(target_path)
         keywords = [self.keyword_list.item(i).text() for i in range(self.keyword_list.count())]
         try:
             with open(target_path, 'wt') as keywords_file:
@@ -143,9 +170,10 @@ class FileScanner(QMainWindow):
             QMessageBox.critical(self, 'Save Failed', f'Could not save keywords:\n{exc}')
 
     def load_keywords_clicked(self):
-        source_path = QFileDialog.getOpenFileName(self, 'Load Keywords', '.', 'Text (*.txt)')[0]
+        source_path = QFileDialog.getOpenFileName(self, 'Load Keywords', self._last_dir(), 'Text (*.txt)')[0]
         if not source_path:
             return
+        self._remember_dir(source_path)
         try:
             with open(source_path, 'rt') as keywords_file:
                 loaded_keywords = [line for line in keywords_file.read().split('\n') if line]
@@ -166,13 +194,14 @@ class FileScanner(QMainWindow):
         self.scan_errors = []
         self.scan_files.setDisabled(True)
         self.add_files.setDisabled(True)
-        self.progress_dialog = QProgressDialog('Scanning files...', None, 0, len(self.file_names), self)
+        self.progress_dialog = QProgressDialog('Scanning files...', 'Cancel', 0, len(self.file_names), self)
         self.progress_dialog.setWindowTitle('Scanning')
         self.progress_dialog.setMinimumDuration(0)
         self.progress_dialog.setValue(0)
         self.scan_worker = ScanWorker(keywords, list(self.file_names), self)
         self.scan_worker.result_ready.connect(self.handle_scan_result)
         self.scan_worker.finished_scanning.connect(self.handle_scan_finished)
+        self.progress_dialog.canceled.connect(self.scan_worker.cancel)
         self.scan_worker.start()
 
     def handle_scan_result(self, result: ScanResult):
@@ -209,15 +238,44 @@ class FileScanner(QMainWindow):
 
     def add_files_clicked(self):
         files = QFileDialog.getOpenFileNames(
-            self, 'Files to Scan', '.', 'PDF Documents (*.pdf);;Word Documents (*.docx);;Text (*.txt);;All Files (*)'
+            self,
+            'Files to Scan',
+            self._last_dir(),
+            'PDF Documents (*.pdf);;Word Documents (*.docx);;Text (*.txt);;All Files (*)',
         )[0]
         if files:
-            count = self.files.rowCount()
-            self.files.setRowCount(count + len(files))
-            for i, file in enumerate(files):
-                self.file_names.append(file)
-                self.files.setItem(i + count, 0, QTableWidgetItem(basename(file)))
-            self.update_scan_button_state()
+            self._remember_dir(files[0])
+        self._add_files(files)
+
+    def _add_files(self, files):
+        if not files:
+            return
+        count = self.files.rowCount()
+        self.files.setRowCount(count + len(files))
+        for i, file in enumerate(files):
+            self.file_names.append(file)
+            self.files.setItem(i + count, 0, QTableWidgetItem(basename(file)))
+        self.update_scan_button_state()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        files = [
+            url.toLocalFile()
+            for url in event.mimeData().urls()
+            if url.isLocalFile() and isfile(url.toLocalFile())
+        ]
+        self._add_files(files)
+
+    def remove_files_clicked(self):
+        rows = sorted({index.row() for index in self.files.selectedIndexes()}, reverse=True)
+        for row in rows:
+            del self.file_names[row]
+            self.files.removeRow(row)
+        self.remove_files.setDisabled(True)
+        self.update_scan_button_state()
 
     def create_keyword_area(self):
         horizontal = QHBoxLayout()
