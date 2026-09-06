@@ -5,6 +5,13 @@
 # nuitka-project: --low-memory
 # nuitka-project: --lto=no
 # nuitka-project: --include-data-files=assets/icon.png=assets/icon.png
+# Windows onefile builds need Nuitka to fetch a helper tool ("Dependency
+# Walker") the first time there's no cached copy; without this flag that's an
+# interactive prompt, which is a silent-but-fatal no-op in CI (a GitHub
+# Actions cache-service outage during a real build hit exactly this - the
+# step still reported success, so the missing binary wasn't caught until the
+# release was missing its Windows asset).
+# nuitka-project: --assume-yes-for-downloads
 # nuitka-project-if: {OS} == "Windows":
 #    nuitka-project: --windows-console-mode=disable
 #    nuitka-project: --windows-icon-from-ico=assets/icon.ico
