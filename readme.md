@@ -42,8 +42,8 @@ uv run --frozen --group lint ruff check .
 ```bash
 uv run --group build nuitka main.py
 ```
-Produces `main.exe` on Windows or `main.bin` on Linux. Build flags live as `# nuitka-project:`
-comments at the top of `main.py`, including `--low-memory`, `--lto=no`, and
+Produces `file-scanner.exe` on Windows or `file-scanner` on Linux. Build flags live as
+`# nuitka-project:` comments at the top of `main.py`, including `--low-memory`, `--lto=no`, and
 `--include-qt-plugins=platforms` — these keep the C-compilation step's memory use bounded (see
 CLAUDE.md for why). A GitHub Actions workflow (`.github/workflows/build-exe.yml`) also builds
 both platforms and attaches the binaries to GitHub Releases when a `v*` tag is pushed.

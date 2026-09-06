@@ -13,10 +13,10 @@ jobs:
         include:
           - os: windows-latest
             artifact: file-scanner-windows
-            binary: main.exe
+            binary: file-scanner.exe
           - os: ubuntu-latest
             artifact: file-scanner-linux
-            binary: main.bin
+            binary: file-scanner
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

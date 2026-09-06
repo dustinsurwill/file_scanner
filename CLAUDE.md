@@ -7,8 +7,8 @@ Guidance for working in this repo.
 - Run app: `uv run python main.py`
 - Run tests: `QT_QPA_PLATFORM=offscreen uv run --frozen --group test pytest -v`
 - Lint: `uv run --frozen --group lint ruff check .`
-- Build standalone exe: `uv run --group build nuitka main.py` (produces `main.exe` on Windows,
-  `main.bin` on Linux)
+- Build standalone exe: `uv run --group build nuitka main.py` (produces `file-scanner.exe` on
+  Windows, `file-scanner` on Linux)
 
 Always use `uv run`/`uv sync`; don't invoke `python`/`pip` directly. Use `--frozen` for
 tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it deliberately

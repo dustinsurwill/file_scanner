@@ -1,4 +1,5 @@
 # nuitka-project: --onefile
+# nuitka-project: --output-filename=file-scanner
 # nuitka-project: --enable-plugins=pyqt6
 # nuitka-project: --include-qt-plugins=platforms
 # nuitka-project: --low-memory
