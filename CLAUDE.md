@@ -182,6 +182,22 @@ Version is derived from git tags via `setuptools-scm` (see `[tool.setuptools_scm
 `V1.0.x` (uppercase `V`); `build-exe.yml`'s tag trigger matches both `v*` and `V*` (tag globs are
 case-sensitive, so it would otherwise silently never fire for that convention).
 
+`main.py` needs `--assume-yes-for-downloads` — Nuitka's Windows onefile mode needs a helper tool
+("Dependency Walker") and normally fetches a cached copy silently, but a cold cache (a real
+GitHub Actions cache-service outage triggered this once) makes it try to download fresh, which
+without this flag is an interactive Yes/No prompt — a silent-but-fatal no-op in CI (`FATAL:
+... Proceed and download? [Yes]/No : no (default non-interactive)`), and the build step still
+exited 0. `build-exe.yml`'s "Verify binary was actually produced" step (`test -f`, right after the
+Nuitka build) exists specifically to catch a repeat of this class of failure loudly instead of
+`upload-artifact` silently uploading nothing and the release quietly ending up short a binary —
+confirmed this is exactly what happened on a real tagged release (V2.0.0's first, since-deleted
+attempt: green CI, missing Windows asset).
+`build-exe.yml`'s release step is a single job (`needs: build`, not one per matrix leg) that
+downloads both platforms' artifacts and calls `action-gh-release` once with both files. Two
+matrix jobs each calling it independently against the same tag raced in practice — confirmed
+directly: the second invocation's `generate_release_notes` produced a release body with the
+"What's Changed" section duplicated verbatim. Don't move that step back into the per-OS matrix.
+
 ## Licensing
 GPL-3.0-only — see `LICENSE` and `readme.md`'s License section. This isn't a free choice: PyQt6
 itself (the Python bindings, not the underlying Qt6 libraries, which are LGPL) is dual-licensed

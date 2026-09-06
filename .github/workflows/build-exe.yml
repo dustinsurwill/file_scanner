@@ -38,14 +38,38 @@ jobs:
       - name: Build with Nuitka
         run: uv run --frozen --group build nuitka main.py
 
+      # Nuitka can print a FATAL error (e.g. a failed non-interactive tool
+      # download) yet still exit 0, which would otherwise leave this whole job
+      # showing green while upload-artifact silently uploads nothing - confirmed
+      # directly: exactly this happened on a real build (see main.py's
+      # --assume-yes-for-downloads comment) and it took a missing release
+      # asset to notice. Fail loudly here instead.
+      - name: Verify binary was actually produced
+        shell: bash
+        run: test -f "${{ matrix.binary }}"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
 
+  release:
+    # A single job (not per-matrix-build) attaches both binaries to the
+    # release in one action-gh-release call. Two parallel matrix jobs each
+    # calling action-gh-release against the same tag raced in practice: the
+    # second call's generate_release_notes duplicated the release notes, and
+    # depending on timing a still-uploading asset could be clobbered too.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.binary }}
+          files: dist/*
           generate_release_notes: true
