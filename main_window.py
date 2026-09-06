@@ -2,7 +2,7 @@ import sys
 from _csv import writer
 from functools import partial
 from multiprocessing import cpu_count, get_context
-from os.path import basename
+from os.path import basename, isfile
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QColor
@@ -72,6 +72,7 @@ class FileScanner(QMainWindow):
         main_layout.setRowMinimumHeight(0, 500)
         self.setCentralWidget(center)
         self.setWindowTitle('File Scanner')
+        self.setAcceptDrops(True)
         if sys.platform == 'win32':
             QApplication.setStyle(QStyleFactory.create('windowsvista'))
         self.file_names = []
@@ -230,6 +231,18 @@ class FileScanner(QMainWindow):
             self.file_names.append(file)
             self.files.setItem(i + count, 0, QTableWidgetItem(basename(file)))
         self.update_scan_button_state()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        files = [
+            url.toLocalFile()
+            for url in event.mimeData().urls()
+            if url.isLocalFile() and isfile(url.toLocalFile())
+        ]
+        self._add_files(files)
 
     def remove_files_clicked(self):
         rows = sorted({index.row() for index in self.files.selectedIndexes()}, reverse=True)
