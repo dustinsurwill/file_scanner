@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QMessageBox, QTableWidgetItem
+from PyQt6.QtWidgets import QFileDialog, QMessageBox, QTableWidgetItem
 
 from main_window import FileScanner
 
@@ -10,19 +10,37 @@ def test_window_launches(qtbot):
     assert window.windowTitle() == 'File Scanner'
 
 
-def test_scan_button_only_enabled_once_keyword_and_file_present(qtbot):
+def test_scan_button_enabled_after_keyword_then_file(qtbot, tmp_path, monkeypatch):
+    a_file = str(tmp_path / 'a.txt')
+    (tmp_path / 'a.txt').write_text('placeholder')
+    monkeypatch.setattr(QFileDialog, 'getOpenFileNames', staticmethod(lambda *a, **k: ([a_file], '')))
+
     window = FileScanner()
     qtbot.addWidget(window)
-
     assert not window.scan_files.isEnabled()
 
-    window.keyword_list.addItem('apple')
-    window.file_names.append('placeholder.txt')
-    window.files.setRowCount(1)
-    window.files.setItem(0, 0, QTableWidgetItem('placeholder.txt'))
-    if window.keyword_list.count():
-        window.scan_files.setDisabled(False)
+    window.new_keyword_text.setText('apple')
+    window.add_keyword_clicked()
+    assert not window.scan_files.isEnabled()
 
+    window.add_files_clicked()
+    assert window.scan_files.isEnabled()
+
+
+def test_scan_button_enabled_after_file_then_keyword(qtbot, tmp_path, monkeypatch):
+    a_file = str(tmp_path / 'a.txt')
+    (tmp_path / 'a.txt').write_text('placeholder')
+    monkeypatch.setattr(QFileDialog, 'getOpenFileNames', staticmethod(lambda *a, **k: ([a_file], '')))
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    assert not window.scan_files.isEnabled()
+
+    window.add_files_clicked()
+    assert not window.scan_files.isEnabled()
+
+    window.new_keyword_text.setText('apple')
+    window.add_keyword_clicked()
     assert window.scan_files.isEnabled()
 
 

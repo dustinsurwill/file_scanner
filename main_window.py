@@ -156,6 +156,7 @@ class FileScanner(QMainWindow):
         self.update_file_headers()
         if self.keyword_list.count():
             self.save_keywords.setDisabled(False)
+        self.update_scan_button_state()
 
     def scan_files_clicked(self):
         if not self.file_names:
@@ -192,7 +193,7 @@ class FileScanner(QMainWindow):
 
     def handle_scan_finished(self):
         self.progress_dialog.close()
-        self.scan_files.setDisabled(False)
+        self.update_scan_button_state()
         self.add_files.setDisabled(False)
         self.export_results.setDisabled(False)
         if self.scan_errors:
@@ -202,6 +203,9 @@ class FileScanner(QMainWindow):
                 'Some files failed',
                 f'{len(self.scan_errors)} file(s) could not be scanned:\n\n{details}',
             )
+
+    def update_scan_button_state(self):
+        self.scan_files.setDisabled(not (self.file_names and self.keyword_list.count()))
 
     def add_files_clicked(self):
         files = QFileDialog.getOpenFileNames(
@@ -213,8 +217,7 @@ class FileScanner(QMainWindow):
             for i, file in enumerate(files):
                 self.file_names.append(file)
                 self.files.setItem(i + count, 0, QTableWidgetItem(basename(file)))
-            if self.keyword_list.count():
-                self.scan_files.setDisabled(False)
+            self.update_scan_button_state()
 
     def create_keyword_area(self):
         horizontal = QHBoxLayout()
@@ -246,6 +249,7 @@ class FileScanner(QMainWindow):
         self.new_keyword_text.setText('')
         self.update_file_headers()
         self.save_keywords.setDisabled(False)
+        self.update_scan_button_state()
         self.new_keyword_text.setFocus()
 
     def update_file_headers(self):
@@ -266,3 +270,4 @@ class FileScanner(QMainWindow):
         self.update_file_headers()
         if not self.keyword_list.count():
             self.save_keywords.setDisabled(True)
+        self.update_scan_button_state()
