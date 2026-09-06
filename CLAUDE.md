@@ -7,7 +7,8 @@ Guidance for working in this repo.
 - Run app: `uv run python main.py`
 - Run tests: `QT_QPA_PLATFORM=offscreen uv run --frozen --group test pytest -v`
 - Lint: `uv run --frozen --group lint ruff check .`
-- Build Windows exe: `uv run --group build nuitka main.py`
+- Build standalone exe: `uv run --group build nuitka main.py` (produces `file-scanner.exe` on
+  Windows, `file-scanner` on Linux)
 
 Always use `uv run`/`uv sync`; don't invoke `python`/`pip` directly. Use `--frozen` for
 tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it deliberately
@@ -30,7 +31,28 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
   `windows-latest` (`QPaintDevice: Cannot destroy paint device that is being painted`). Call
   `.show()` from `main.py` after construction instead.
 - `main.py` needs `multiprocessing.freeze_support()` as the first line in `__main__` — required
-  for `Pool` to work in the Nuitka-frozen Windows executable.
+  for `Pool` to work in the Nuitka-frozen Windows executable. Verified working: a frozen
+  `--onefile` binary running a `QThread` that drives a `spawn`-context `Pool.imap_unordered` (the
+  exact `ScanWorker` pattern) completes correctly with no deadlock — tested directly against a
+  compiled binary, not just inferred from docs.
+- PDF extraction uses `pypdfium2`, not `PyMuPDF`/`fitz` — **do not switch back to PyMuPDF**.
+  PyMuPDF's `mupdf.py` is a multi-megabyte SWIG-generated wrapper; Nuitka compiles every followed
+  pure-Python module to C, and that specific file reliably OOMs the C backend compiler (`cc1`)
+  even at 80GB+ RAM. This is a confirmed, unresolved upstream bug affecting both `--onefile` and
+  `--standalone` (see [Nuitka#3243](https://github.com/Nuitka/Nuitka/issues/3243),
+  [Nuitka#3291](https://github.com/Nuitka/Nuitka/issues/3291)), not something fixable with flags.
+  `pypdfium2` (ctypes bindings, no giant generated wrapper) compiles cleanly and is comparable in
+  extraction speed. Test fixtures generate PDFs with `reportlab` (test-only dependency) instead.
+- The Nuitka build in `main.py` needs `--low-memory --lto=no --include-qt-plugins=platforms` even
+  with `pypdfium2` — `--enable-plugins=pyqt6` otherwise bundles every Qt plugin category
+  (`wayland-*`, `egldeviceintegrations`, `tls`, `printsupport`, …) this app never uses, and LTO
+  substantially raises peak compiler memory for onefile builds. Don't add `multiprocessing` to
+  `--enable-plugins` — recent Nuitka versions enable that plugin unconditionally and warn if it's
+  passed explicitly.
+- The Nuitka pyqt6 plugin prints "Qt threading does not work, so prefer PySide6" on every build —
+  this is stale/overbroad for our usage. Verified directly: a frozen binary's `QThread.run()`
+  executes on a genuinely separate native thread ID, and the main event loop stays responsive
+  while it runs. Don't take that warning as a reason to avoid `QThread` here.
 - Any code path that mutates `file_names` or the keyword list must call
   `update_scan_button_state()` — there is no other single source of truth for whether the Scan
   button should be enabled (this was a real, previously-shipped bug).

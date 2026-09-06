@@ -1,8 +1,8 @@
 import zipfile
 
-import pymupdf
 import pytest
 from PyQt6.QtCore import QSettings
+from reportlab.pdfgen import canvas
 
 import main_window
 
@@ -16,11 +16,9 @@ def isolated_qsettings(tmp_path, monkeypatch):
 
 
 def make_pdf(path, text):
-    document = pymupdf.open()
-    page = document.new_page()
-    page.insert_text((72, 72), text)
-    document.save(path)
-    document.close()
+    page = canvas.Canvas(path)
+    page.drawString(72, 720, text)
+    page.save()
 
 
 def make_docx(path, text):

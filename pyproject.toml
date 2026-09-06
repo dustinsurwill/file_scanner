@@ -5,7 +5,7 @@ description = "Scan a batch of files (PDF/DOCX/TXT) for keywords and show a foun
 requires-python = ">=3.14"
 dependencies = [
     "PyQt6>=6.7",
-    "PyMuPDF>=1.24",
+    "pypdfium2>=4.30",
     "docx2txt>=0.8",
 ]
 
@@ -13,6 +13,7 @@ dependencies = [
 test = [
     "pytest>=8.0",
     "pytest-qt>=4.4",
+    "reportlab>=4.0",
 ]
 build = [
     "nuitka>=2.4",

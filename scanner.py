@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import docx2txt
-import pymupdf
+import pypdfium2
 
 
 @dataclass
@@ -15,8 +15,14 @@ class ScanResult:
 def extract_text(file: str) -> str:
     suffix = Path(file).suffix.lower()
     if suffix == '.pdf':
-        with pymupdf.open(file) as document:
-            return ''.join(page.get_text() for page in document)
+        text = ''
+        with pypdfium2.PdfDocument(file) as document:
+            for page in document:
+                textpage = page.get_textpage()
+                text += textpage.get_text_range()
+                textpage.close()
+                page.close()
+        return text
     if suffix == '.docx':
         return docx2txt.process(file)
     with open(file, 'rt', encoding='utf-8', errors='replace') as text_file:

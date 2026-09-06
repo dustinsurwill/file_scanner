@@ -16,3 +16,6 @@ keywords.txt
 venv/
 .venv/
 *.egg-info/
+*.bin
+*.exe
+nuitka-crash-report.xml
