@@ -14,3 +14,5 @@ src/
 *.cmd
 keywords.txt
 venv/
+.venv/
+*.egg-info/
