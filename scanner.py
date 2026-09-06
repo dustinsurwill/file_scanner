@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 import docx2txt
 import pymupdf
@@ -9,8 +8,8 @@ import pymupdf
 @dataclass
 class ScanResult:
     file: str
-    matches: Optional[List[bool]] = None
-    error: Optional[str] = None
+    matches: list[bool] | None = None
+    error: str | None = None
 
 
 def extract_text(file: str) -> str:
@@ -24,9 +23,9 @@ def extract_text(file: str) -> str:
         return text_file.read()
 
 
-def scan_files_process(keywords: List[str], file: str) -> ScanResult:
+def scan_files_process(keywords: list[str], file: str) -> ScanResult:
     try:
         text = extract_text(file).lower()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any parser failure becomes a per-file error, not a crash
         return ScanResult(file=file, error=str(exc))
     return ScanResult(file=file, matches=[keyword in text for keyword in keywords])
