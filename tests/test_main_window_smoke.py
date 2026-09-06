@@ -1,3 +1,5 @@
+from os.path import normpath
+
 from PyQt6.QtCore import QMimeData, QUrl
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QTableWidgetItem
 
@@ -117,7 +119,7 @@ def test_drag_and_drop_adds_files(qtbot, tmp_path):
     mime_data.setUrls([QUrl.fromLocalFile(str(a_file))])
     window.dropEvent(FakeDropEvent(mime_data))
 
-    assert window.file_names == [str(a_file)]
+    assert [normpath(f) for f in window.file_names] == [normpath(str(a_file))]
     assert window.files.rowCount() == 1
     assert window.scan_files.isEnabled() is False  # no keywords added yet
 
