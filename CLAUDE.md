@@ -178,7 +178,18 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
 
 ## Versioning
 Version is derived from git tags via `setuptools-scm` (see `[tool.setuptools_scm]` in
-`pyproject.toml`) — never hand-edit a version number in the code.
+`pyproject.toml`) — never hand-edit a version number in the code. Release tags historically use
+`V1.0.x` (uppercase `V`); `build-exe.yml`'s tag trigger matches both `v*` and `V*` (tag globs are
+case-sensitive, so it would otherwise silently never fire for that convention).
+
+## Licensing
+GPL-3.0-only — see `LICENSE` and `readme.md`'s License section. This isn't a free choice: PyQt6
+itself (the Python bindings, not the underlying Qt6 libraries, which are LGPL) is dual-licensed
+GPLv3/commercial by Riverbank Computing, confirmed via its own package metadata
+(`License-Expression: GPL-3.0-only`). Distributing the built binaries without a commercial
+Riverbank license means the whole distributed work is bound by GPLv3's terms. Don't relicense
+more permissively (MIT/Apache/etc.) unless a commercial PyQt6 license is actually in place, or
+PyQt6 is dropped in favor of something else.
 
 ## Backlog (deliberately deferred, not TODOs to pick up unprompted)
 Session save/load, dark-mode consistency on Linux.
