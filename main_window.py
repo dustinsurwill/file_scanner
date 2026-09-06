@@ -37,7 +37,6 @@ from scanner import MatchMode, ScanResult, scan_files_process
 # parsing library doesn't fully release (observed with pdfminer.six on large
 # PDF batches) can't accumulate across the life of a long-running scan.
 MAX_TASKS_PER_CHILD = 50
-ERROR_CELL_COLOR = QColor('orange')
 
 
 class ScanWorker(QThread):
@@ -90,22 +89,55 @@ class FileScanner(QMainWindow):
         self.setAcceptDrops(True)
         if sys.platform == 'win32':
             # 'windows11' (Qt 6.7+) supports the Windows dark/light color
-            # scheme; 'windowsvista' (Qt's old default) ignores it entirely.
-            # Fall back for older Qt/Windows where 'windows11' isn't available.
-            QApplication.setStyle(QStyleFactory.create('windows11') or QStyleFactory.create('windowsvista'))
+            # scheme. Fall back to 'fusion' (also dark-mode aware) rather
+            # than 'windowsvista' (Qt's old default, which ignores dark mode
+            # entirely) in case 'windows11' isn't available for some reason.
+            QApplication.setStyle(QStyleFactory.create('windows11') or QStyleFactory.create('fusion'))
         self.file_names = []
         self.file_rows = {}
         self.scan_errors = []
-        self.options = Options(self)
         self.scan_worker = None
         self.progress_dialog = None
         self.settings = QSettings('file-scanner', 'FileScanner')
+        self.options = Options(self)
+        self._load_display_options()
         geometry = self.settings.value('window_geometry')
         if geometry is not None:
             self.restoreGeometry(geometry)
 
+    # Display-option fields persisted via QSettings, alongside window
+    # geometry and the last-used directory. Colors round-trip as hex strings.
+    _DISPLAY_COLOR_KEYS = (
+        'found_color',
+        'missing_color',
+        'invalid_regex_background',
+        'invalid_regex_text',
+        'error_color',
+    )
+    _DISPLAY_TEXT_KEYS = ('found_text', 'missing_text', 'error_text')
+
+    def _load_display_options(self):
+        display = self.options.display
+        for key in self._DISPLAY_COLOR_KEYS:
+            value = self.settings.value(f'display/{key}')
+            if value:
+                setattr(display, key, QColor(value))
+        for key in self._DISPLAY_TEXT_KEYS:
+            value = self.settings.value(f'display/{key}')
+            if value:
+                setattr(display, key, value)
+        self.options.refresh_widgets()
+
+    def _save_display_options(self):
+        display = self.options.display
+        for key in self._DISPLAY_COLOR_KEYS:
+            self.settings.setValue(f'display/{key}', getattr(display, key).name())
+        for key in self._DISPLAY_TEXT_KEYS:
+            self.settings.setValue(f'display/{key}', getattr(display, key))
+
     def closeEvent(self, event):
         self.settings.setValue('window_geometry', self.saveGeometry())
+        self._save_display_options()
         super().closeEvent(event)
 
     def _last_dir(self):
@@ -274,8 +306,8 @@ class FileScanner(QMainWindow):
         if result.error is not None:
             self.scan_errors.append((result.file, result.error))
             for column in range(1, self.files.columnCount()):
-                widget = QTableWidgetItem('ERROR')
-                widget.setBackground(ERROR_CELL_COLOR)
+                widget = QTableWidgetItem(self.options.display.error_text)
+                widget.setBackground(self.options.display.error_color)
                 widget.setToolTip(result.error)
                 self.files.setItem(row, column, widget)
         else:

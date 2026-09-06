@@ -13,6 +13,7 @@ keywords, showing a found/missing grid you can export to CSV.
   can cancel mid-scan
 - Per-file scan errors (corrupt/unreadable files) are reported without failing the whole batch
 - Export results to CSV or a color-coded `.xlsx` workbook
+- Customizable found/missing/scan-error colors and labels (Options dialog), persisted across runs
 - Remembers the last-used directory across file dialogs and the window's size/position across runs
 
 ## Requirements
@@ -54,5 +55,5 @@ both platforms and attaches the binaries to GitHub Releases when a `v*` tag is p
 - `main.py` — entry point, Nuitka build flags
 - `main_window.py` — main window UI and the background `ScanWorker`
 - `scanner.py` — pure scan/extraction logic (no Qt dependency), used by the worker pool
-- `options_dialog.py` — display options (colors/labels for found/missing)
+- `options_dialog.py` — display options (colors/labels for found/missing/scan-error)
 - `tests/` — pytest + pytest-qt test suite

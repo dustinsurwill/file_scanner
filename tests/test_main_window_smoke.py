@@ -293,6 +293,47 @@ def test_window_geometry_persists_across_instances(qtbot):
     assert abs(reopened.size().height() - 600) <= 5
 
 
+def test_display_options_persist_across_instances(qtbot):
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.options.display.found_color = QColor('#123456')
+    window.options.display.error_text = 'BROKEN'
+    window.close()
+
+    reopened = FileScanner()
+    qtbot.addWidget(reopened)
+
+    assert reopened.options.display.found_color == QColor('#123456')
+    assert reopened.options.display.error_text == 'BROKEN'
+    # the dialog's own widgets must reflect the loaded values too
+    assert reopened.options.error_text_input.text() == 'BROKEN'
+
+
+def test_custom_error_color_and_text_used_in_scan_results(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(QMessageBox, 'warning', staticmethod(lambda *a, **k: None))
+    bad_file = tmp_path / 'bad.docx'
+    bad_file.write_bytes(b'not a real docx')
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.options.display.error_text = 'BROKEN'
+    window.options.display.error_color = QColor('purple')
+    window.keyword_list.addItem('apple')
+    window.update_file_headers()
+    window.file_names = [str(bad_file)]
+    window.files.setRowCount(1)
+    window.files.setItem(0, 0, QTableWidgetItem('bad.docx'))
+    window.scan_files.setDisabled(False)
+
+    window.scan_files_clicked()
+    qtbot.waitUntil(lambda: not window.scan_worker.isRunning(), timeout=15000)
+    qtbot.wait(50)
+
+    item = window.files.item(0, 1)
+    assert item.text() == 'BROKEN'
+    assert item.background().color() == QColor('purple')
+
+
 def test_dialogs_open_in_last_used_directory(qtbot, tmp_path, monkeypatch):
     used_dirs = []
     a_file = str(tmp_path / 'a.txt')

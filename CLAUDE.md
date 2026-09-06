@@ -67,6 +67,17 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
   keyword wouldn't refresh `file_headers`, the save-keywords button state, or regex-validity
   highlighting, so it's disabled rather than half-supported. Removing and re-adding is the
   supported way to change a keyword.
+- Windows only targets Windows 10+ (Windows 10 is out of support, but still the floor). Style is
+  forced to `QStyleFactory.create('windows11')` (Qt 6.7+, follows the Windows dark/light color
+  scheme), falling back to `'fusion'` (also dark-mode aware) rather than Qt's old default
+  `'windowsvista'` (which ignores dark mode entirely) — not verified against a real Windows
+  build in this session, reasoned from Qt's documented style behavior.
+- `options_dialog.Options`' color/text fields (`ScanDisplayOptions`) are persisted via
+  `FileScanner`'s `QSettings` under `display/<field>` keys (colors round-tripped as hex strings),
+  loaded in `__init__` via `_load_display_options()` and saved in `closeEvent` via
+  `_save_display_options()`. `Options.refresh_widgets()` must be called after mutating
+  `self.display` directly (bypassing the dialog's own setters) so the dialog's buttons/text
+  inputs stay in sync with what's actually in effect.
 
 ## Tests
 - `tests/conftest.py` has an autouse `isolated_qsettings` fixture that monkeypatches
@@ -86,6 +97,4 @@ Version is derived from git tags via `setuptools-scm` (see `[tool.setuptools_scm
 
 ## Backlog (deliberately deferred, not TODOs to pick up unprompted)
 Session save/load, result snippets/context, sortable/filterable results table, dark-mode
-consistency on Linux (note: `main_window.py` forces `QStyleFactory.create('windowsvista')` on
-Windows, which does not support Windows dark mode at all — Qt 6.7+'s `windows11` style does;
-worth revisiting alongside the Linux dark-mode work), double-click a row to open the file.
+consistency on Linux, double-click a row to open the file.
