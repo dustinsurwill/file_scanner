@@ -45,21 +45,23 @@ jobs:
         with:
           enable-cache: true
 
-      # Rolling cache (restore-keys falls back to the last one saved, a fresh
-      # entry is written every run) - avoids re-downloading Nuitka's tools
-      # every build (this is what a GitHub cache-service outage broke once,
-      # see main.py's --assume-yes-for-downloads comment) and, once ccache
-      # itself is warm, speeds up recompiling modules that didn't change
-      # between releases. Not verified end-to-end against a real Windows
-      # build - the path above is Nuitka's documented cache-dir convention,
-      # not something inspected directly on a Windows runner.
+      # Static per-OS key, deliberately: actions/cache's save step silently
+      # skips if the exact key already exists, so this saves once and is then
+      # only ever restored, never refreshed - fine here, since correctness
+      # doesn't depend on this cache being current (ccache/Nuitka hash their
+      # own cached content internally regardless of what's sitting in the
+      # directory; a stale entry just means more cache misses, not wrong
+      # output). Avoids re-downloading Nuitka's tools every build (this is
+      # what a GitHub cache-service outage broke once, see main.py's
+      # --assume-yes-for-downloads comment). Not verified end-to-end against
+      # a real Windows build - the path above is Nuitka's documented
+      # cache-dir convention, not something inspected directly on a Windows
+      # runner.
       - name: Cache Nuitka's downloaded tools and ccache's object cache
         uses: actions/cache@v6
         with:
           path: ${{ matrix.cache_paths }}
-          key: nuitka-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            nuitka-${{ runner.os }}-
+          key: nuitka-${{ runner.os }}
 
       - name: Build with Nuitka
         run: uv run --frozen --group build nuitka main.py

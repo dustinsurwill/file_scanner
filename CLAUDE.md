@@ -215,6 +215,17 @@ inspected directly on a Windows runner — verify against a real build (a fresh 
 a warm cache-hit run, comparing wall-clock time and confirming no download prompt) before trusting
 it blindly.
 
+The cache key is a static `nuitka-${{ runner.os }}` — deliberately, not `github.run_id` or a
+content hash. `actions/cache`'s save step silently skips if the exact key already exists, so a
+static key saves once and is then only ever restored, never refreshed again. That's an acceptable
+trade here: correctness doesn't depend on this cache being current (ccache/Nuitka hash their own
+cached content internally regardless of what's already sitting in the directory — a stale entry
+just means more cache misses, never wrong output), and the specific failure this exists to prevent
+(Nuitka's tool downloads) rarely changes at all. If the ccache side ever needs to actually keep
+accumulating benefit across releases instead of freezing at its first snapshot, that would need a
+key that changes on purpose (e.g. `hashFiles('uv.lock')`) — not attempted here per a deliberate
+"keep it simple" call.
+
 ## Licensing
 GPL-3.0-only — see `LICENSE` and `readme.md`'s License section. This isn't a free choice: PyQt6
 itself (the Python bindings, not the underlying Qt6 libraries, which are LGPL) is dual-licensed
