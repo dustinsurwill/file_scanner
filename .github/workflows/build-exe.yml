@@ -10,16 +10,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
 
-      - name: Install dependencies
-        run: uv sync --group build
-
       - name: Build with Nuitka
-        run: uv run --group build nuitka main.py
+        run: uv run --frozen --group build nuitka main.py
 
       - uses: actions/upload-artifact@v4
         with:
@@ -31,3 +30,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: main.exe
+          generate_release_notes: true
