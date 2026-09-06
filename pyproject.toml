@@ -2,7 +2,7 @@
 name = "file-scanner"
 dynamic = ["version"]
 description = "Scan a batch of files (PDF/DOCX/TXT) for keywords and show a found/missing grid."
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "PyQt6>=6.7",
     "PyMuPDF>=1.24",
