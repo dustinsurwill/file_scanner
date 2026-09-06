@@ -7,11 +7,13 @@ keywords, showing a found/missing grid you can export to CSV.
 - Add files via a file picker or by dragging them onto the window
 - Remove selected files from the batch without starting over
 - Add/remove/save/load keyword lists
+- Match keywords as a substring, whole word, or regex pattern, with invalid regex patterns
+  flagged live and blocked from starting a scan
 - Scan runs on a background process pool so the UI stays responsive, with a progress dialog you
   can cancel mid-scan
 - Per-file scan errors (corrupt/unreadable files) are reported without failing the whole batch
-- Export results to CSV
-- Remembers the last-used directory across file dialogs
+- Export results to CSV or a color-coded `.xlsx` workbook
+- Remembers the last-used directory across file dialogs and the window's size/position across runs
 
 ## Requirements
 - Python 3.14+

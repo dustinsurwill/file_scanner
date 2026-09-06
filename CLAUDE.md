@@ -56,6 +56,17 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
 - Any code path that mutates `file_names` or the keyword list must call
   `update_scan_button_state()` — there is no other single source of truth for whether the Scan
   button should be enabled (this was a real, previously-shipped bug).
+- `openpyxl` (used for `.xlsx` export) was verified to compile cleanly with Nuitka's onefile
+  backend (no repeat of the PyMuPDF `mupdf.py` OOM issue) — it's pure Python with only
+  `et-xmlfile` as a transitive dependency, no giant generated wrapper module.
+- Regex match mode: whitespace in the extracted text is deliberately left uncollapsed only in
+  `MatchMode.REGEX` — Substring/Whole-word collapse whitespace runs (see `scanner.py`) so a
+  multi-word keyword still matches text a PDF/DOCX line-wrap split across a newline. Regex mode
+  is the power-user escape hatch and should see the real extracted text.
+- `keyword_list` (`QListWidget`) has `setEditTriggers(NoEditTriggers)` — in-place editing of a
+  keyword wouldn't refresh `file_headers`, the save-keywords button state, or regex-validity
+  highlighting, so it's disabled rather than half-supported. Removing and re-adding is the
+  supported way to change a keyword.
 
 ## Tests
 - `tests/conftest.py` has an autouse `isolated_qsettings` fixture that monkeypatches
@@ -74,6 +85,7 @@ Version is derived from git tags via `setuptools-scm` (see `[tool.setuptools_scm
 `pyproject.toml`) — never hand-edit a version number in the code.
 
 ## Backlog (deliberately deferred, not TODOs to pick up unprompted)
-Session save/load, `.xlsx` export, whole-word/regex keyword matching, result snippets/context,
-sortable/filterable results table, persisted window geometry, dark-mode consistency on Linux,
-double-click a row to open the file.
+Session save/load, result snippets/context, sortable/filterable results table, dark-mode
+consistency on Linux (note: `main_window.py` forces `QStyleFactory.create('windowsvista')` on
+Windows, which does not support Windows dark mode at all — Qt 6.7+'s `windows11` style does;
+worth revisiting alongside the Linux dark-mode work), double-click a row to open the file.
