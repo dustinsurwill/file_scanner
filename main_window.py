@@ -618,11 +618,18 @@ class FileScanner(QMainWindow):
         vertical = QVBoxLayout()
         vertical.addLayout(horizontal)
         mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel('Match mode:'))
+        # One mode applies to every keyword in the list for the whole scan -
+        # there's no per-keyword mode. Label and tooltip both say so
+        # explicitly; this was a real point of user confusion.
+        match_mode_hint = 'Applies to every keyword in the list below for the whole scan - not set per keyword.'
+        match_mode_label = QLabel('Match mode (all keywords):')
+        match_mode_label.setToolTip(match_mode_hint)
+        mode_row.addWidget(match_mode_label)
         self.match_mode_combo = QComboBox()
         self.match_mode_combo.addItem('Substring', MatchMode.SUBSTRING)
         self.match_mode_combo.addItem('Whole word', MatchMode.WHOLE_WORD)
         self.match_mode_combo.addItem('Regex', MatchMode.REGEX)
+        self.match_mode_combo.setToolTip(match_mode_hint)
         self.match_mode_combo.currentIndexChanged.connect(self._on_match_mode_changed)
         mode_row.addWidget(self.match_mode_combo)
         vertical.addLayout(mode_row)
