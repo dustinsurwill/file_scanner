@@ -1,4 +1,4 @@
-from scanner import scan_files_process
+from scanner import MatchMode, scan_files_process
 
 
 def test_matches_keywords_in_txt_file(tmp_path):
@@ -71,3 +71,75 @@ def test_non_utf8_text_file_reports_matches_instead_of_raising(tmp_path):
 
     assert result.error is None
     assert result.matches == [True]
+
+
+def test_whole_word_mode_avoids_substring_false_positive(tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('concatenate this')
+
+    result = scan_files_process(['cat'], str(path), mode=MatchMode.WHOLE_WORD)
+
+    assert result.error is None
+    assert result.matches == [False]
+
+
+def test_whole_word_mode_matches_standalone_word(tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('the cat sat')
+
+    result = scan_files_process(['cat'], str(path), mode=MatchMode.WHOLE_WORD)
+
+    assert result.error is None
+    assert result.matches == [True]
+
+
+def test_regex_mode_matches_pattern(tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('invoice #12345 due')
+
+    result = scan_files_process([r'#\d+'], str(path), mode=MatchMode.REGEX)
+
+    assert result.error is None
+    assert result.matches == [True]
+
+
+def test_regex_mode_reports_error_for_invalid_pattern(tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('hello')
+
+    result = scan_files_process(['('], str(path), mode=MatchMode.REGEX)
+
+    assert result.matches is None
+    assert result.error is not None
+
+
+def test_substring_mode_matches_phrase_split_by_line_wrap(tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('grape\njuice is tasty')
+
+    result = scan_files_process(['grape juice'], str(path))
+
+    assert result.error is None
+    assert result.matches == [True]
+
+
+def test_whole_word_mode_matches_phrase_split_by_line_wrap(tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('the grape\njuice is tasty')
+
+    result = scan_files_process(['grape juice'], str(path), mode=MatchMode.WHOLE_WORD)
+
+    assert result.error is None
+    assert result.matches == [True]
+
+
+def test_regex_mode_does_not_collapse_whitespace(tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('grape\njuice')
+
+    # A literal space in the pattern must not match the newline - regex mode
+    # intentionally sees the raw extracted text, unlike substring/whole-word.
+    result = scan_files_process(['grape juice'], str(path), mode=MatchMode.REGEX)
+
+    assert result.error is None
+    assert result.matches == [False]

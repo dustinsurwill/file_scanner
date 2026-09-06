@@ -1,9 +1,11 @@
 from os.path import normpath
 
 from PyQt6.QtCore import QMimeData, QUrl
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QTableWidgetItem
 
 from main_window import FileScanner
+from scanner import MatchMode
 
 
 class FakeDropEvent:
@@ -22,6 +24,13 @@ def test_window_launches(qtbot):
     qtbot.addWidget(window)
 
     assert window.windowTitle() == 'File Scanner'
+
+
+def test_window_icon_loads_from_assets(qtbot):
+    window = FileScanner()
+    qtbot.addWidget(window)
+
+    assert not window.windowIcon().isNull()
 
 
 def test_scan_button_enabled_after_keyword_then_file(qtbot, tmp_path, monkeypatch):
@@ -148,6 +157,188 @@ def test_cancel_mid_scan_stops_worker_and_resets_buttons(qtbot, tmp_path):
 
     assert window.scan_files.isEnabled()
     assert window.add_files.isEnabled()
+
+
+def test_whole_word_mode_used_during_scan(qtbot, tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('concatenate this')
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.keyword_list.addItem('cat')
+    window.update_file_headers()
+    window.match_mode_combo.setCurrentIndex(window.match_mode_combo.findData(MatchMode.WHOLE_WORD))
+    window.file_names = [str(path)]
+    window.files.setRowCount(1)
+    window.files.setItem(0, 0, QTableWidgetItem('notes.txt'))
+    window.scan_files.setDisabled(False)
+
+    window.scan_files_clicked()
+    qtbot.waitUntil(lambda: not window.scan_worker.isRunning(), timeout=15000)
+    qtbot.wait(50)
+
+    assert window.files.item(0, 1).text() == 'false'
+
+
+def test_scan_files_clicked_rejects_invalid_regex_before_starting(qtbot, monkeypatch):
+    monkeypatch.setattr(QMessageBox, 'critical', staticmethod(lambda *a, **k: None))
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.keyword_list.addItem('(')
+    window.update_file_headers()
+    window.match_mode_combo.setCurrentIndex(window.match_mode_combo.findData(MatchMode.REGEX))
+    window.file_names = ['dummy.txt']
+    window.scan_files.setDisabled(False)
+
+    window.scan_files_clicked()
+
+    assert window.scan_worker is None
+
+
+def test_regex_mode_flags_invalid_text_as_typed(qtbot):
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.match_mode_combo.setCurrentIndex(window.match_mode_combo.findData(MatchMode.REGEX))
+
+    window.new_keyword_text.setText('(')
+    window._update_keyword_input_validity()
+
+    assert not window.add_keyword.isEnabled()
+    style = window.new_keyword_text.styleSheet()
+    # Both colors must be set explicitly - a background-only stylesheet left
+    # the text color to the OS theme, unreadable in dark mode.
+    assert window.options.display.invalid_regex_background.name() in style
+    assert window.options.display.invalid_regex_text.name() in style
+
+    window.new_keyword_text.setText('valid')
+    window._update_keyword_input_validity()
+
+    assert window.add_keyword.isEnabled()
+    assert window.new_keyword_text.styleSheet() == ''
+
+
+def test_substring_mode_does_not_flag_regex_metacharacters(qtbot):
+    window = FileScanner()
+    qtbot.addWidget(window)
+
+    window.new_keyword_text.setText('(')
+    window._update_keyword_input_validity()
+
+    assert window.add_keyword.isEnabled()
+    assert window.new_keyword_text.styleSheet() == ''
+
+
+def test_switching_to_regex_mode_highlights_existing_invalid_keyword_and_disables_scan(qtbot, tmp_path):
+    a_file = str(tmp_path / 'a.txt')
+    (tmp_path / 'a.txt').write_text('placeholder')
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.keyword_list.addItem('(')
+    window.update_file_headers()
+    window._add_files([a_file])
+    assert window.scan_files.isEnabled()  # substring mode - '(' is just a literal character
+
+    window.match_mode_combo.setCurrentIndex(window.match_mode_combo.findData(MatchMode.REGEX))
+
+    assert not window.scan_files.isEnabled()
+    item = window.keyword_list.item(0)
+    assert item.background().color() == window.options.display.invalid_regex_background
+    assert item.foreground().color() == window.options.display.invalid_regex_text
+
+    window.match_mode_combo.setCurrentIndex(window.match_mode_combo.findData(MatchMode.SUBSTRING))
+
+    assert window.scan_files.isEnabled()
+    assert item.background().color() != window.options.display.invalid_regex_background
+
+
+def test_keyword_list_is_not_editable(qtbot):
+    window = FileScanner()
+    qtbot.addWidget(window)
+
+    assert window.keyword_list.editTriggers() == window.keyword_list.EditTrigger.NoEditTriggers
+
+
+def test_export_excel_writes_workbook_with_colors(qtbot, tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+
+    xlsx_path = str(tmp_path / 'out.xlsx')
+    monkeypatch.setattr(QFileDialog, 'getSaveFileName', staticmethod(lambda *a, **k: (xlsx_path, '')))
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.keyword_list.addItem('apple')
+    window.update_file_headers()
+    window.files.setRowCount(1)
+    window.files.setItem(0, 0, QTableWidgetItem('good.txt'))
+    found_item = QTableWidgetItem('true')
+    found_item.setBackground(window.options.display.found_color)
+    window.files.setItem(0, 1, found_item)
+
+    window.export_excel_clicked()
+
+    workbook = load_workbook(xlsx_path)
+    sheet = workbook.active
+    assert [cell.value for cell in sheet[1]] == ['File', 'apple']
+    assert [cell.value for cell in sheet[2]] == ['good.txt', 'true']
+    hex_color = window.options.display.found_color.name(QColor.NameFormat.HexRgb).lstrip('#').upper()
+    assert hex_color in sheet.cell(row=2, column=2).fill.fgColor.rgb.upper()
+
+
+def test_window_geometry_persists_across_instances(qtbot):
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.resize(800, 600)
+    window.close()
+
+    reopened = FileScanner()
+    qtbot.addWidget(reopened)
+
+    # offscreen QPA rounds frame geometry by a couple of pixels, so allow slack
+    assert abs(reopened.size().width() - 800) <= 5
+    assert abs(reopened.size().height() - 600) <= 5
+
+
+def test_display_options_persist_across_instances(qtbot):
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.options.display.found_color = QColor('#123456')
+    window.options.display.error_text = 'BROKEN'
+    window.close()
+
+    reopened = FileScanner()
+    qtbot.addWidget(reopened)
+
+    assert reopened.options.display.found_color == QColor('#123456')
+    assert reopened.options.display.error_text == 'BROKEN'
+    # the dialog's own widgets must reflect the loaded values too
+    assert reopened.options.error_text_input.text() == 'BROKEN'
+
+
+def test_custom_error_color_and_text_used_in_scan_results(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(QMessageBox, 'warning', staticmethod(lambda *a, **k: None))
+    bad_file = tmp_path / 'bad.docx'
+    bad_file.write_bytes(b'not a real docx')
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.options.display.error_text = 'BROKEN'
+    window.options.display.error_color = QColor('purple')
+    window.keyword_list.addItem('apple')
+    window.update_file_headers()
+    window.file_names = [str(bad_file)]
+    window.files.setRowCount(1)
+    window.files.setItem(0, 0, QTableWidgetItem('bad.docx'))
+    window.scan_files.setDisabled(False)
+
+    window.scan_files_clicked()
+    qtbot.waitUntil(lambda: not window.scan_worker.isRunning(), timeout=15000)
+    qtbot.wait(50)
+
+    item = window.files.item(0, 1)
+    assert item.text() == 'BROKEN'
+    assert item.background().color() == QColor('purple')
 
 
 def test_dialogs_open_in_last_used_directory(qtbot, tmp_path, monkeypatch):

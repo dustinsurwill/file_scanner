@@ -56,6 +56,41 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
 - Any code path that mutates `file_names` or the keyword list must call
   `update_scan_button_state()` — there is no other single source of truth for whether the Scan
   button should be enabled (this was a real, previously-shipped bug).
+- `openpyxl` (used for `.xlsx` export) was verified to compile cleanly with Nuitka's onefile
+  backend (no repeat of the PyMuPDF `mupdf.py` OOM issue) — it's pure Python with only
+  `et-xmlfile` as a transitive dependency, no giant generated wrapper module.
+- Regex match mode: whitespace in the extracted text is deliberately left uncollapsed only in
+  `MatchMode.REGEX` — Substring/Whole-word collapse whitespace runs (see `scanner.py`) so a
+  multi-word keyword still matches text a PDF/DOCX line-wrap split across a newline. Regex mode
+  is the power-user escape hatch and should see the real extracted text.
+- `keyword_list` (`QListWidget`) has `setEditTriggers(NoEditTriggers)` — in-place editing of a
+  keyword wouldn't refresh `file_headers`, the save-keywords button state, or regex-validity
+  highlighting, so it's disabled rather than half-supported. Removing and re-adding is the
+  supported way to change a keyword.
+- Windows only targets Windows 10+ (Windows 10 is out of support, but still the floor). Style is
+  forced to `QStyleFactory.create('windows11')` (Qt 6.7+, follows the Windows dark/light color
+  scheme), falling back to `'fusion'` (also dark-mode aware) rather than Qt's old default
+  `'windowsvista'` (which ignores dark mode entirely) — not verified against a real Windows
+  build in this session, reasoned from Qt's documented style behavior.
+- `options_dialog.Options`' color/text fields (`ScanDisplayOptions`) are persisted via
+  `FileScanner`'s `QSettings` under `display/<field>` keys (colors round-tripped as hex strings),
+  loaded in `__init__` via `_load_display_options()` and saved in `closeEvent` via
+  `_save_display_options()`. `Options.refresh_widgets()` must be called after mutating
+  `self.display` directly (bypassing the dialog's own setters) so the dialog's buttons/text
+  inputs stay in sync with what's actually in effect.
+- App icon (`assets/icon.svg` source, rasterized to `icon.png`/`icon.ico`) is loaded via
+  `main_window.ICON_PATH = Path(__file__).resolve().parent / 'assets' / 'icon.png'` — resolves
+  correctly both from source and in a Nuitka onefile build because `--include-data-files` (in
+  `main.py`) places the file at that same relative path inside the runtime extraction dir. Windows
+  additionally bakes the icon into the exe resource via `--windows-icon-from-ico`. There is no
+  onefile equivalent on Linux — Nuitka's `--linux-icon` only applies with `--mode=app`/`app-dist`
+  and is a silent no-op (with a warning) otherwise, so don't add it back; the Linux taskbar icon
+  comes entirely from the runtime `QApplication.setWindowIcon()`/`FileScanner.setWindowIcon()`
+  calls (the window manager reads that as the X11/Wayland icon hint). Keep the Windows flag and
+  the `--include-data-files` line in sync with wherever `assets/icon.*` actually lives if it's
+  ever moved. Verified: a real onefile build succeeds, `windowIcon().isNull()` is `False` at
+  runtime, and the icon was confirmed rendering correctly in the taskbar of a real compiled
+  Linux build. Not yet confirmed on real Windows in this session.
 
 ## Tests
 - `tests/conftest.py` has an autouse `isolated_qsettings` fixture that monkeypatches
@@ -74,6 +109,5 @@ Version is derived from git tags via `setuptools-scm` (see `[tool.setuptools_scm
 `pyproject.toml`) — never hand-edit a version number in the code.
 
 ## Backlog (deliberately deferred, not TODOs to pick up unprompted)
-Session save/load, `.xlsx` export, whole-word/regex keyword matching, result snippets/context,
-sortable/filterable results table, persisted window geometry, dark-mode consistency on Linux,
-double-click a row to open the file.
+Session save/load, result snippets/context, sortable/filterable results table, dark-mode
+consistency on Linux, double-click a row to open the file.
