@@ -1,5 +1,8 @@
 # nuitka-project: --onefile
-# nuitka-project: --enable-plugins=pyqt6,multiprocessing
+# nuitka-project: --enable-plugins=pyqt6
+# nuitka-project: --include-qt-plugins=platforms
+# nuitka-project: --low-memory
+# nuitka-project: --lto=no
 # nuitka-project-if: {OS} == "Windows":
 #    nuitka-project: --windows-console-mode=disable
 
