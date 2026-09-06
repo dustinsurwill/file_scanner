@@ -43,6 +43,7 @@ class ScanWorker(QThread):
         super().__init__(parent)
         self.keywords = keywords
         self.file_names = file_names
+        self._pool = None
 
     def run(self):
         worker_count = min(cpu_count(), len(self.file_names))
@@ -53,9 +54,17 @@ class ScanWorker(QThread):
         # non-main thread in a Qt app.
         context = get_context('spawn')
         with context.Pool(processes=worker_count, maxtasksperchild=MAX_TASKS_PER_CHILD) as pool:
-            for result in pool.imap_unordered(scan, self.file_names):
-                self.result_ready.emit(result)
+            self._pool = pool
+            try:
+                for result in pool.imap_unordered(scan, self.file_names):
+                    self.result_ready.emit(result)
+            except Exception:  # noqa: BLE001 - a cancel-triggered pool.terminate() surfaces here
+                pass
         self.finished_scanning.emit()
+
+    def cancel(self):
+        if self._pool is not None:
+            self._pool.terminate()
 
 
 class FileScanner(QMainWindow):
@@ -175,13 +184,14 @@ class FileScanner(QMainWindow):
         self.scan_errors = []
         self.scan_files.setDisabled(True)
         self.add_files.setDisabled(True)
-        self.progress_dialog = QProgressDialog('Scanning files...', None, 0, len(self.file_names), self)
+        self.progress_dialog = QProgressDialog('Scanning files...', 'Cancel', 0, len(self.file_names), self)
         self.progress_dialog.setWindowTitle('Scanning')
         self.progress_dialog.setMinimumDuration(0)
         self.progress_dialog.setValue(0)
         self.scan_worker = ScanWorker(keywords, list(self.file_names), self)
         self.scan_worker.result_ready.connect(self.handle_scan_result)
         self.scan_worker.finished_scanning.connect(self.handle_scan_finished)
+        self.progress_dialog.canceled.connect(self.scan_worker.cancel)
         self.scan_worker.start()
 
     def handle_scan_result(self, result: ScanResult):
