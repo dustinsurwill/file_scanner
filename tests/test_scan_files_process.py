@@ -1,4 +1,4 @@
-from scanner import MatchMode, scan_files_process
+from scanner import MAX_OCCURRENCES_PER_KEYWORD, MatchMode, scan_files_process
 
 
 def test_matches_keywords_in_txt_file(tmp_path):
@@ -143,3 +143,56 @@ def test_regex_mode_does_not_collapse_whitespace(tmp_path):
 
     assert result.error is None
     assert result.matches == [False]
+
+
+def test_all_occurrences_reported_not_just_first(tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('apple one, apple two, apple three')
+
+    result = scan_files_process(['apple'], str(path))
+
+    assert len(result.occurrences[0]) == 3
+    assert result.truncated == [False]
+
+
+def test_occurrence_count_capped_and_truncated_flag_set(tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('apple ' * (MAX_OCCURRENCES_PER_KEYWORD + 5))
+
+    result = scan_files_process(['apple'], str(path))
+
+    assert len(result.occurrences[0]) == MAX_OCCURRENCES_PER_KEYWORD
+    assert result.truncated == [True]
+
+
+def test_pdf_page_number_reported_for_each_occurrence(multipage_pdf_file):
+    result = scan_files_process(['apple'], multipage_pdf_file)
+
+    assert result.error is None
+    pages = [occ.page for occ in result.occurrences[0]]
+    assert pages == [1, 2]
+
+
+def test_pdf_single_page_reports_page_one(pdf_file):
+    result = scan_files_process(['apple'], pdf_file)
+
+    assert [occ.page for occ in result.occurrences[0]] == [1]
+
+
+def test_docx_and_txt_have_no_page_number(docx_file, tmp_path):
+    txt_path = tmp_path / 'notes.txt'
+    txt_path.write_text('banana bread recipe')
+
+    docx_result = scan_files_process(['banana'], docx_file)
+    txt_result = scan_files_process(['banana'], str(txt_path))
+
+    assert [occ.page for occ in docx_result.occurrences[0]] == [None]
+    assert [occ.page for occ in txt_result.occurrences[0]] == [None]
+
+
+def test_phrase_split_across_pdf_page_break_still_matches(split_phrase_pdf_file):
+    result = scan_files_process(['grape juice'], split_phrase_pdf_file)
+
+    assert result.error is None
+    assert result.matches == [True]
+    assert len(result.occurrences[0]) == 1
