@@ -4,7 +4,7 @@ from PyQt6.QtCore import QMimeData, QUrl
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QTableWidgetItem
 
-from main_window import INVALID_REGEX_COLOR, FileScanner
+from main_window import FileScanner
 from scanner import MatchMode
 
 
@@ -198,7 +198,11 @@ def test_regex_mode_flags_invalid_text_as_typed(qtbot):
     window._update_keyword_input_validity()
 
     assert not window.add_keyword.isEnabled()
-    assert window.new_keyword_text.styleSheet() != ''
+    style = window.new_keyword_text.styleSheet()
+    # Both colors must be set explicitly - a background-only stylesheet left
+    # the text color to the OS theme, unreadable in dark mode.
+    assert window.options.display.invalid_regex_background.name() in style
+    assert window.options.display.invalid_regex_text.name() in style
 
     window.new_keyword_text.setText('valid')
     window._update_keyword_input_validity()
@@ -232,12 +236,14 @@ def test_switching_to_regex_mode_highlights_existing_invalid_keyword_and_disable
     window.match_mode_combo.setCurrentIndex(window.match_mode_combo.findData(MatchMode.REGEX))
 
     assert not window.scan_files.isEnabled()
-    assert window.keyword_list.item(0).background().color() == INVALID_REGEX_COLOR
+    item = window.keyword_list.item(0)
+    assert item.background().color() == window.options.display.invalid_regex_background
+    assert item.foreground().color() == window.options.display.invalid_regex_text
 
     window.match_mode_combo.setCurrentIndex(window.match_mode_combo.findData(MatchMode.SUBSTRING))
 
     assert window.scan_files.isEnabled()
-    assert window.keyword_list.item(0).background().color() != INVALID_REGEX_COLOR
+    assert item.background().color() != window.options.display.invalid_regex_background
 
 
 def test_keyword_list_is_not_editable(qtbot):

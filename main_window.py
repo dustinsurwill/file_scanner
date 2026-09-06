@@ -38,7 +38,6 @@ from scanner import MatchMode, ScanResult, scan_files_process
 # PDF batches) can't accumulate across the life of a long-running scan.
 MAX_TASKS_PER_CHILD = 50
 ERROR_CELL_COLOR = QColor('orange')
-INVALID_REGEX_COLOR = QColor('#f8d7da')
 
 
 class ScanWorker(QThread):
@@ -90,7 +89,10 @@ class FileScanner(QMainWindow):
         self.setWindowTitle('File Scanner')
         self.setAcceptDrops(True)
         if sys.platform == 'win32':
-            QApplication.setStyle(QStyleFactory.create('windowsvista'))
+            # 'windows11' (Qt 6.7+) supports the Windows dark/light color
+            # scheme; 'windowsvista' (Qt's old default) ignores it entirely.
+            # Fall back for older Qt/Windows where 'windows11' isn't available.
+            QApplication.setStyle(QStyleFactory.create('windows11') or QStyleFactory.create('windowsvista'))
         self.file_names = []
         self.file_rows = {}
         self.scan_errors = []
@@ -317,7 +319,15 @@ class FileScanner(QMainWindow):
     def _update_keyword_input_validity(self):
         text = self.new_keyword_text.text()
         invalid = self._match_mode() is MatchMode.REGEX and text and not self._is_valid_regex(text)
-        self.new_keyword_text.setStyleSheet(f'background-color: {INVALID_REGEX_COLOR.name()};' if invalid else '')
+        if invalid:
+            background = self.options.display.invalid_regex_background.name()
+            foreground = self.options.display.invalid_regex_text.name()
+            # Set both colors explicitly - a background-only stylesheet left
+            # the text color to the OS theme, unreadable against a fixed
+            # light background in dark mode.
+            self.new_keyword_text.setStyleSheet(f'background-color: {background}; color: {foreground};')
+        else:
+            self.new_keyword_text.setStyleSheet('')
         self.add_keyword.setDisabled(not text or invalid)
 
     def _refresh_keyword_validity_highlighting(self):
@@ -325,7 +335,12 @@ class FileScanner(QMainWindow):
         for i in range(self.keyword_list.count()):
             item = self.keyword_list.item(i)
             invalid = regex_mode and not self._is_valid_regex(item.text())
-            item.setBackground(INVALID_REGEX_COLOR if invalid else QBrush())
+            if invalid:
+                item.setBackground(self.options.display.invalid_regex_background)
+                item.setForeground(self.options.display.invalid_regex_text)
+            else:
+                item.setBackground(QBrush())
+                item.setForeground(QBrush())
 
     def _on_match_mode_changed(self):
         self._refresh_keyword_validity_highlighting()
