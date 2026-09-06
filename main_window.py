@@ -2,9 +2,9 @@ import sys
 from _csv import writer
 from functools import partial
 from multiprocessing import cpu_count, get_context
-from os.path import basename, isfile
+from os.path import basename, dirname, isfile
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QSettings, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QApplication,
@@ -58,7 +58,7 @@ class ScanWorker(QThread):
             try:
                 for result in pool.imap_unordered(scan, self.file_names):
                     self.result_ready.emit(result)
-            except Exception:  # noqa: BLE001 - a cancel-triggered pool.terminate() surfaces here
+            except Exception:  # noqa: BLE001, S110 - a cancel-triggered pool.terminate() surfaces here
                 pass
         self.finished_scanning.emit()
 
@@ -90,6 +90,13 @@ class FileScanner(QMainWindow):
         self.options = Options(self)
         self.scan_worker = None
         self.progress_dialog = None
+        self.settings = QSettings('file-scanner', 'FileScanner')
+
+    def _last_dir(self):
+        return self.settings.value('last_dir', '.')
+
+    def _remember_dir(self, path):
+        self.settings.setValue('last_dir', dirname(path))
 
     def create_files_area(self):
         vertical = QVBoxLayout()
@@ -134,9 +141,10 @@ class FileScanner(QMainWindow):
         return vertical
 
     def export_results_clicked(self):
-        target_path = QFileDialog.getSaveFileName(self, 'Export Results', '.', 'Excel (*.csv)')[0]
+        target_path = QFileDialog.getSaveFileName(self, 'Export Results', self._last_dir(), 'Excel (*.csv)')[0]
         if not target_path:
             return
+        self._remember_dir(target_path)
         try:
             with open(target_path, 'wt', newline='') as csv_file:
                 csv_writer = writer(csv_file)
@@ -150,9 +158,10 @@ class FileScanner(QMainWindow):
             QMessageBox.critical(self, 'Export Failed', f'Could not write results:\n{exc}')
 
     def save_keywords_clicked(self):
-        target_path = QFileDialog.getSaveFileName(self, 'Save Keywords', '.', 'Text (*.txt)')[0]
+        target_path = QFileDialog.getSaveFileName(self, 'Save Keywords', self._last_dir(), 'Text (*.txt)')[0]
         if not target_path:
             return
+        self._remember_dir(target_path)
         keywords = [self.keyword_list.item(i).text() for i in range(self.keyword_list.count())]
         try:
             with open(target_path, 'wt') as keywords_file:
@@ -161,9 +170,10 @@ class FileScanner(QMainWindow):
             QMessageBox.critical(self, 'Save Failed', f'Could not save keywords:\n{exc}')
 
     def load_keywords_clicked(self):
-        source_path = QFileDialog.getOpenFileName(self, 'Load Keywords', '.', 'Text (*.txt)')[0]
+        source_path = QFileDialog.getOpenFileName(self, 'Load Keywords', self._last_dir(), 'Text (*.txt)')[0]
         if not source_path:
             return
+        self._remember_dir(source_path)
         try:
             with open(source_path, 'rt') as keywords_file:
                 loaded_keywords = [line for line in keywords_file.read().split('\n') if line]
@@ -228,8 +238,13 @@ class FileScanner(QMainWindow):
 
     def add_files_clicked(self):
         files = QFileDialog.getOpenFileNames(
-            self, 'Files to Scan', '.', 'PDF Documents (*.pdf);;Word Documents (*.docx);;Text (*.txt);;All Files (*)'
+            self,
+            'Files to Scan',
+            self._last_dir(),
+            'PDF Documents (*.pdf);;Word Documents (*.docx);;Text (*.txt);;All Files (*)',
         )[0]
+        if files:
+            self._remember_dir(files[0])
         self._add_files(files)
 
     def _add_files(self, files):
