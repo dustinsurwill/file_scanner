@@ -8,8 +8,8 @@ from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
-from PyQt6.QtCore import QSettings, QThread, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QIcon
+from PyQt6.QtCore import QSettings, Qt, QThread, QUrl, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -34,6 +34,8 @@ from PyQt6.QtWidgets import (
 from options_dialog import Options
 from scanner import MatchMode, ScanResult, scan_files_process
 
+FILE_PATH_ROLE = Qt.ItemDataRole.UserRole
+
 # Recycle each worker after this many files so any per-file memory that a
 # parsing library doesn't fully release (observed with pdfminer.six on large
 # PDF batches) can't accumulate across the life of a long-running scan.
@@ -42,6 +44,13 @@ MAX_TASKS_PER_CHILD = 50
 # Nuitka onefile build, where --include-data-files places it at this same
 # relative path inside the runtime extraction directory.
 ICON_PATH = str(Path(__file__).resolve().parent / 'assets' / 'icon.png')
+
+
+def _build_tooltip(occurrences, truncated):
+    lines = [f'p. {occ.page}: {occ.snippet}' if occ.page is not None else occ.snippet for occ in occurrences]
+    if truncated:
+        lines.append(f'…and more matches not shown (showing first {len(occurrences)})')
+    return '\n'.join(lines)
 
 
 class ScanWorker(QThread):
@@ -101,7 +110,7 @@ class FileScanner(QMainWindow):
             # entirely) in case 'windows11' isn't available for some reason.
             QApplication.setStyle(QStyleFactory.create('windows11') or QStyleFactory.create('fusion'))
         self.file_names = []
-        self.file_rows = {}
+        self.file_items = {}
         self.scan_errors = []
         self.scan_worker = None
         self.progress_dialog = None
@@ -172,13 +181,23 @@ class FileScanner(QMainWindow):
         self.export_excel.clicked.connect(self.export_excel_clicked)
         top_buttons.addWidget(self.export_excel)
         vertical.addLayout(top_buttons)
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel('Filter:'))
+        self.filter_text = QLineEdit()
+        self.filter_text.setPlaceholderText('Type to filter rows...')
+        self.filter_text.textChanged.connect(self._apply_filter)
+        filter_row.addWidget(self.filter_text)
+        vertical.addLayout(filter_row)
         self.files = QTableWidget()
         self.files.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.files.setAlternatingRowColors(True)
         self.files.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.files.setSortingEnabled(True)
         self.files.itemSelectionChanged.connect(
             lambda: self.remove_files.setDisabled(not self.files.selectedIndexes())
         )
+        self.files.cellDoubleClicked.connect(self._open_file_at_row)
+        self.files.horizontalHeader().sortIndicatorChanged.connect(self._apply_filter)
         self.update_file_headers()
         vertical.addWidget(self.files)
         buttons = QHBoxLayout()
@@ -294,10 +313,13 @@ class FileScanner(QMainWindow):
                         self, 'Invalid Regex', f'Keyword "{keyword}" is not a valid regex pattern:\n{exc}'
                     )
                     return
-        self.file_rows = {file: row for row, file in enumerate(self.file_names)}
         self.scan_errors = []
         self.scan_files.setDisabled(True)
         self.add_files.setDisabled(True)
+        # Sorting stays off for the duration of the scan: re-sorting on every
+        # single incoming result would visibly shuffle rows mid-scan and cost
+        # O(n log n) per result on a large batch. Re-enabled once it's done.
+        self.files.setSortingEnabled(False)
         self.progress_dialog = QProgressDialog('Scanning files...', 'Cancel', 0, len(self.file_names), self)
         self.progress_dialog.setWindowTitle('Scanning')
         self.progress_dialog.setMinimumDuration(0)
@@ -309,7 +331,7 @@ class FileScanner(QMainWindow):
         self.scan_worker.start()
 
     def handle_scan_result(self, result: ScanResult):
-        row = self.file_rows[result.file]
+        row = self.file_items[result.file].row()
         if result.error is not None:
             self.scan_errors.append((result.file, result.error))
             for column in range(1, self.files.columnCount()):
@@ -321,6 +343,8 @@ class FileScanner(QMainWindow):
             for i, has_match in enumerate(result.matches):
                 widget = QTableWidgetItem(self.options.display.found_text if has_match else self.options.display.missing_text)
                 widget.setBackground(self.options.display.found_color if has_match else self.options.display.missing_color)
+                if has_match:
+                    widget.setToolTip(_build_tooltip(result.occurrences[i], result.truncated[i]))
                 self.files.setItem(row, i + 1, widget)
         self.progress_dialog.setValue(self.progress_dialog.value() + 1)
 
@@ -330,6 +354,8 @@ class FileScanner(QMainWindow):
         self.add_files.setDisabled(False)
         self.export_results.setDisabled(False)
         self.export_excel.setDisabled(False)
+        self.files.setSortingEnabled(True)
+        self._apply_filter()
         if self.scan_errors:
             details = '\n'.join(f'{basename(file)}: {error}' for file, error in self.scan_errors)
             QMessageBox.warning(
@@ -400,12 +426,21 @@ class FileScanner(QMainWindow):
     def _add_files(self, files):
         if not files:
             return
+        # Disable sorting during the bulk insert - avoids an O(n log n) resort
+        # per row and any reordering mid-populate; restore + let it resort once.
+        was_sorting = self.files.isSortingEnabled()
+        self.files.setSortingEnabled(False)
         count = self.files.rowCount()
         self.files.setRowCount(count + len(files))
         for i, file in enumerate(files):
             self.file_names.append(file)
-            self.files.setItem(i + count, 0, QTableWidgetItem(basename(file)))
+            item = QTableWidgetItem(basename(file))
+            item.setData(FILE_PATH_ROLE, file)
+            self.files.setItem(i + count, 0, item)
+            self.file_items[file] = item
+        self.files.setSortingEnabled(was_sorting)
         self.update_scan_button_state()
+        self._apply_filter()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -422,10 +457,32 @@ class FileScanner(QMainWindow):
     def remove_files_clicked(self):
         rows = sorted({index.row() for index in self.files.selectedIndexes()}, reverse=True)
         for row in rows:
-            del self.file_names[row]
+            file = self.files.item(row, 0).data(FILE_PATH_ROLE)
+            self.file_names.remove(file)
+            del self.file_items[file]
             self.files.removeRow(row)
         self.remove_files.setDisabled(True)
         self.update_scan_button_state()
+
+    def _apply_filter(self, *_args):
+        query = self.filter_text.text().strip().lower()
+        for row in range(self.files.rowCount()):
+            if not query:
+                self.files.setRowHidden(row, False)
+                continue
+            matched = any(
+                self.files.item(row, column) is not None and query in self.files.item(row, column).text().lower()
+                for column in range(self.files.columnCount())
+            )
+            self.files.setRowHidden(row, not matched)
+
+    def _open_file_at_row(self, row, _column):
+        item = self.files.item(row, 0)
+        file = item.data(FILE_PATH_ROLE) if item else None
+        if not file or not isfile(file):
+            QMessageBox.warning(self, 'File Not Found', f'{file or "This file"} no longer exists.')
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(file))
 
     def create_keyword_area(self):
         horizontal = QHBoxLayout()
