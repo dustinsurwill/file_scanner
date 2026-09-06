@@ -215,16 +215,13 @@ inspected directly on a Windows runner — verify against a real build (a fresh 
 a warm cache-hit run, comparing wall-clock time and confirming no download prompt) before trusting
 it blindly.
 
-The cache key is a static `nuitka-${{ runner.os }}` — deliberately, not `github.run_id` or a
-content hash. `actions/cache`'s save step silently skips if the exact key already exists, so a
-static key saves once and is then only ever restored, never refreshed again. That's an acceptable
-trade here: correctness doesn't depend on this cache being current (ccache/Nuitka hash their own
-cached content internally regardless of what's already sitting in the directory — a stale entry
-just means more cache misses, never wrong output), and the specific failure this exists to prevent
-(Nuitka's tool downloads) rarely changes at all. If the ccache side ever needs to actually keep
-accumulating benefit across releases instead of freezing at its first snapshot, that would need a
-key that changes on purpose (e.g. `hashFiles('uv.lock')`) — not attempted here per a deliberate
-"keep it simple" call.
+The cache key is `nuitka-${{ runner.os }}-${{ github.run_id }}` with `restore-keys:
+nuitka-${{ runner.os }}-`, not a static per-OS key. `actions/cache`'s save step silently skips if
+the exact key already exists — a static key would save once and then only ever be restored, never
+refreshed again, which would freeze ccache's object cache at its first snapshot instead of letting
+it keep accumulating benefit across releases. Making the key unique per run (`run_id`) means the
+save always succeeds; `restore-keys`' prefix match is what still gets each run a warm start from
+the most recent previous save.
 
 ## Licensing
 GPL-3.0-only — see `LICENSE` and `readme.md`'s License section. This isn't a free choice: PyQt6
