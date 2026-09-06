@@ -12,6 +12,10 @@ keywords, showing a found/missing grid you can export to CSV.
 - Scan runs on a background process pool so the UI stays responsive, with a progress dialog you
   can cancel mid-scan
 - Per-file scan errors (corrupt/unreadable files) are reported without failing the whole batch
+- Hover a found cell to see every match as a snippet of surrounding text (with a PDF page number,
+  where the format supports one)
+- Sort results by clicking a column header, or filter rows by typing in the filter box
+- Double-click a row to open that file in its default app
 - Export results to CSV or a color-coded `.xlsx` workbook
 - Customizable found/missing/scan-error colors and labels (Options dialog), persisted across runs
 - Remembers the last-used directory across file dialogs and the window's size/position across runs
