@@ -1,8 +1,8 @@
 [project]
 name = "file-scanner"
-version = "2.0.0"
+dynamic = ["version"]
 description = "Scan a batch of files (PDF/DOCX/TXT) for keywords and show a found/missing grid."
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11"
 dependencies = [
     "PyQt6>=6.7",
     "PyMuPDF>=1.24",
@@ -18,10 +18,21 @@ build = [
     "nuitka>=2.4",
     "pywin32-ctypes>=0.2.3; sys_platform == 'win32'",
 ]
+lint = [
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 120
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 py-modules = ["main", "scanner", "options_dialog", "main_window"]
+
+[tool.setuptools_scm]
+# Derives the package version from the latest git tag (e.g. v2.1.0 -> 2.1.0)
+# so it never needs to be bumped by hand or drift out of sync with releases.
+fallback_version = "0.0.0"
