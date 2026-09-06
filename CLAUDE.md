@@ -198,6 +198,23 @@ matrix jobs each calling it independently against the same tag raced in practice
 directly: the second invocation's `generate_release_notes` produced a release body with the
 "What's Changed" section duplicated verbatim. Don't move that step back into the per-OS matrix.
 
+`build-exe.yml`'s cache step: `--assume-yes-for-downloads`'s own `--help` text says Nuitka can
+download its own private copies of "dependency walker, ccache, and even gcc on Windows" as
+needed, into its own cache dir (documented convention: `~/.cache/Nuitka` on Linux,
+`%LOCALAPPDATA%\Nuitka\Nuitka\Cache` on Windows) — persisting that dir via `actions/cache` avoids
+re-downloading those tools every build, which is the actual thing a GitHub cache-service outage
+broke once (see above). The workflow also caches ccache's own default object-cache location
+(`~/.cache/ccache` / `%LOCALAPPDATA%\ccache`) alongside it, in case Nuitka's private copy doesn't
+redirect its storage into the Nuitka cache dir — cheap to include both, since `actions/cache`
+silently skips a path that doesn't exist. On Linux, `ccache` itself is `apt-get install`ed
+explicitly (Nuitka's Scons layer only auto-uses a *system* ccache already on PATH — that's a
+different check than the private-download one the `--help` text describes); on Windows, no
+separate install step is needed since `--assume-yes-for-downloads` already lets Nuitka fetch its
+own copy. **Caveat**: the Windows cache path is Nuitka's documented convention, not something
+inspected directly on a Windows runner — verify against a real build (a fresh cache-miss run vs.
+a warm cache-hit run, comparing wall-clock time and confirming no download prompt) before trusting
+it blindly.
+
 ## Licensing
 GPL-3.0-only — see `LICENSE` and `readme.md`'s License section. This isn't a free choice: PyQt6
 itself (the Python bindings, not the underlying Qt6 libraries, which are LGPL) is dual-licensed
