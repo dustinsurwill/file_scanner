@@ -59,6 +59,11 @@ Produces `file-scanner.exe` on Windows or `file-scanner` on Linux. Build flags l
 CLAUDE.md for why). A GitHub Actions workflow (`.github/workflows/build-exe.yml`) also builds
 both platforms and attaches the binaries to GitHub Releases when a `v*` tag is pushed.
 
+## License
+GPL-3.0-only (see [LICENSE](LICENSE)) — required by PyQt6 itself, which is dual-licensed
+GPLv3/commercial by Riverbank Computing; this project doesn't hold a commercial PyQt6 license, so
+GPLv3 is the license that legally covers distributing the built binaries.
+
 ## Project layout
 - `main.py` — entry point, Nuitka build flags
 - `main_window.py` — main window UI and the background `ScanWorker`

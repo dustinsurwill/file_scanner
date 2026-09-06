@@ -2,7 +2,9 @@ name: Build executables
 
 on:
   push:
-    tags: ['v*']
+    # Both cases: existing releases are tagged V1.0.x (uppercase), and tag
+    # globs are case-sensitive, so 'v*' alone would silently never match them.
+    tags: ['v*', 'V*']
   workflow_dispatch:
 
 jobs:

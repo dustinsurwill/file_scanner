@@ -2,6 +2,8 @@
 name = "file-scanner"
 dynamic = ["version"]
 description = "Scan a batch of files (PDF/DOCX/TXT) for keywords and show a found/missing grid."
+readme = "readme.md"
+license = "GPL-3.0-only"
 requires-python = ">=3.14"
 dependencies = [
     "PyQt6>=6.7",
