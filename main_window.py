@@ -80,7 +80,6 @@ class FileScanner(QMainWindow):
         self.options = Options(self)
         self.scan_worker = None
         self.progress_dialog = None
-        self.show()
 
     def create_files_area(self):
         vertical = QVBoxLayout()

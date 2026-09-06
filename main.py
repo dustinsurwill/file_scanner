@@ -14,4 +14,5 @@ if __name__ == '__main__':
     freeze_support()
     app = QApplication(sys.argv)
     window = FileScanner()
+    window.show()
     sys.exit(app.exec())
