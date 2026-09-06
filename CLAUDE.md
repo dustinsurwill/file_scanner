@@ -78,6 +78,19 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
   `_save_display_options()`. `Options.refresh_widgets()` must be called after mutating
   `self.display` directly (bypassing the dialog's own setters) so the dialog's buttons/text
   inputs stay in sync with what's actually in effect.
+- App icon (`assets/icon.svg` source, rasterized to `icon.png`/`icon.ico`) is loaded via
+  `main_window.ICON_PATH = Path(__file__).resolve().parent / 'assets' / 'icon.png'` — resolves
+  correctly both from source and in a Nuitka onefile build because `--include-data-files` (in
+  `main.py`) places the file at that same relative path inside the runtime extraction dir. Windows
+  additionally bakes the icon into the exe resource via `--windows-icon-from-ico`. There is no
+  onefile equivalent on Linux — Nuitka's `--linux-icon` only applies with `--mode=app`/`app-dist`
+  and is a silent no-op (with a warning) otherwise, so don't add it back; the Linux taskbar icon
+  comes entirely from the runtime `QApplication.setWindowIcon()`/`FileScanner.setWindowIcon()`
+  calls (the window manager reads that as the X11/Wayland icon hint). Keep the Windows flag and
+  the `--include-data-files` line in sync with wherever `assets/icon.*` actually lives if it's
+  ever moved. Verified: a real onefile build succeeds, `windowIcon().isNull()` is `False` at
+  runtime, and the icon was confirmed rendering correctly in the taskbar of a real compiled
+  Linux build. Not yet confirmed on real Windows in this session.
 
 ## Tests
 - `tests/conftest.py` has an autouse `isolated_qsettings` fixture that monkeypatches

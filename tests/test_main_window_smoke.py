@@ -26,6 +26,13 @@ def test_window_launches(qtbot):
     assert window.windowTitle() == 'File Scanner'
 
 
+def test_window_icon_loads_from_assets(qtbot):
+    window = FileScanner()
+    qtbot.addWidget(window)
+
+    assert not window.windowIcon().isNull()
+
+
 def test_scan_button_enabled_after_keyword_then_file(qtbot, tmp_path, monkeypatch):
     a_file = str(tmp_path / 'a.txt')
     (tmp_path / 'a.txt').write_text('placeholder')

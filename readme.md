@@ -15,6 +15,7 @@ keywords, showing a found/missing grid you can export to CSV.
 - Export results to CSV or a color-coded `.xlsx` workbook
 - Customizable found/missing/scan-error colors and labels (Options dialog), persisted across runs
 - Remembers the last-used directory across file dialogs and the window's size/position across runs
+- Has an actual app/taskbar icon instead of the default Qt one
 
 ## Requirements
 - Python 3.14+
@@ -56,4 +57,6 @@ both platforms and attaches the binaries to GitHub Releases when a `v*` tag is p
 - `main_window.py` — main window UI and the background `ScanWorker`
 - `scanner.py` — pure scan/extraction logic (no Qt dependency), used by the worker pool
 - `options_dialog.py` — display options (colors/labels for found/missing/scan-error)
+- `assets/` — app icon (`icon.svg` source, `icon.png` for the runtime window icon, `icon.ico` for
+  the Windows executable resource)
 - `tests/` — pytest + pytest-qt test suite

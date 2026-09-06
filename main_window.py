@@ -4,11 +4,12 @@ from _csv import writer
 from functools import partial
 from multiprocessing import cpu_count, get_context
 from os.path import basename, dirname, isfile
+from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
 from PyQt6.QtCore import QSettings, QThread, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtGui import QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -37,6 +38,10 @@ from scanner import MatchMode, ScanResult, scan_files_process
 # parsing library doesn't fully release (observed with pdfminer.six on large
 # PDF batches) can't accumulate across the life of a long-running scan.
 MAX_TASKS_PER_CHILD = 50
+# Resolves correctly both from source (relative to this file) and in a
+# Nuitka onefile build, where --include-data-files places it at this same
+# relative path inside the runtime extraction directory.
+ICON_PATH = str(Path(__file__).resolve().parent / 'assets' / 'icon.png')
 
 
 class ScanWorker(QThread):
@@ -86,6 +91,8 @@ class FileScanner(QMainWindow):
         main_layout.setRowMinimumHeight(0, 500)
         self.setCentralWidget(center)
         self.setWindowTitle('File Scanner')
+        if isfile(ICON_PATH):
+            self.setWindowIcon(QIcon(ICON_PATH))
         self.setAcceptDrops(True)
         if sys.platform == 'win32':
             # 'windows11' (Qt 6.7+) supports the Windows dark/light color
