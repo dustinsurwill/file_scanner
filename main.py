@@ -15,6 +15,11 @@
 # nuitka-project-if: {OS} == "Windows":
 #    nuitka-project: --windows-console-mode=disable
 #    nuitka-project: --windows-icon-from-ico=assets/icon.ico
+#    # Explicit rather than Nuitka's inferred default, so the choice is
+#    # visible and doesn't nag on every build: bundle the VC++ runtime DLLs
+#    # so the exe runs on a machine that doesn't already have the
+#    # redistributable installed, at the cost of a somewhat larger binary.
+#    nuitka-project: --include-windows-runtime-dlls=yes
 # Linux has no equivalent onefile flag - '--linux-icon' only applies with
 # --mode=app/app-dist (Nuitka warns and no-ops otherwise). The runtime
 # app.setWindowIcon()/setWindowIcon() calls below are what set the taskbar
