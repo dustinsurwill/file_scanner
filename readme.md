@@ -42,9 +42,11 @@ uv run --frozen --group lint ruff check .
 ```bash
 uv run --group build nuitka main.py
 ```
-Build flags live as `# nuitka-project:` comments at the top of `main.py`. A GitHub Actions
-workflow (`.github/workflows/build-exe.yml`) also builds and attaches the `.exe` to GitHub
-Releases when a `v*` tag is pushed.
+Build flags live as `# nuitka-project:` comments at the top of `main.py`, including
+`--low-memory`, `--lto=no`, and `--include-qt-plugins=platforms` — these keep the C-compilation
+step's memory use bounded (see CLAUDE.md for why). A GitHub Actions workflow
+(`.github/workflows/build-exe.yml`) also builds and attaches the `.exe` to GitHub Releases when a
+`v*` tag is pushed.
 
 ## Project layout
 - `main.py` — entry point, Nuitka build flags
