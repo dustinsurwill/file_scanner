@@ -87,6 +87,10 @@ class FileScanner(QMainWindow):
         self.add_files = QPushButton('Add Files')
         self.add_files.clicked.connect(self.add_files_clicked)
         top_buttons.addWidget(self.add_files)
+        self.remove_files = QPushButton('Remove Files')
+        self.remove_files.setDisabled(True)
+        self.remove_files.clicked.connect(self.remove_files_clicked)
+        top_buttons.addWidget(self.remove_files)
         self.export_results = QPushButton('Export Results')
         self.export_results.setDisabled(True)
         self.export_results.clicked.connect(self.export_results_clicked)
@@ -95,6 +99,10 @@ class FileScanner(QMainWindow):
         self.files = QTableWidget()
         self.files.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.files.setAlternatingRowColors(True)
+        self.files.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.files.itemSelectionChanged.connect(
+            lambda: self.remove_files.setDisabled(not self.files.selectedIndexes())
+        )
         self.update_file_headers()
         vertical.addWidget(self.files)
         buttons = QHBoxLayout()
@@ -211,13 +219,25 @@ class FileScanner(QMainWindow):
         files = QFileDialog.getOpenFileNames(
             self, 'Files to Scan', '.', 'PDF Documents (*.pdf);;Word Documents (*.docx);;Text (*.txt);;All Files (*)'
         )[0]
-        if files:
-            count = self.files.rowCount()
-            self.files.setRowCount(count + len(files))
-            for i, file in enumerate(files):
-                self.file_names.append(file)
-                self.files.setItem(i + count, 0, QTableWidgetItem(basename(file)))
-            self.update_scan_button_state()
+        self._add_files(files)
+
+    def _add_files(self, files):
+        if not files:
+            return
+        count = self.files.rowCount()
+        self.files.setRowCount(count + len(files))
+        for i, file in enumerate(files):
+            self.file_names.append(file)
+            self.files.setItem(i + count, 0, QTableWidgetItem(basename(file)))
+        self.update_scan_button_state()
+
+    def remove_files_clicked(self):
+        rows = sorted({index.row() for index in self.files.selectedIndexes()}, reverse=True)
+        for row in rows:
+            del self.file_names[row]
+            self.files.removeRow(row)
+        self.remove_files.setDisabled(True)
+        self.update_scan_button_state()
 
     def create_keyword_area(self):
         horizontal = QHBoxLayout()
