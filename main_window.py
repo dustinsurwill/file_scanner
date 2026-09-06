@@ -1,17 +1,22 @@
+import re
 import sys
 from _csv import writer
 from functools import partial
 from multiprocessing import cpu_count, get_context
 from os.path import basename, dirname, isfile
 
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill
 from PyQt6.QtCore import QSettings, QThread, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QLineEdit,
     QListWidget,
     QMainWindow,
@@ -26,28 +31,30 @@ from PyQt6.QtWidgets import (
 )
 
 from options_dialog import Options
-from scanner import ScanResult, scan_files_process
+from scanner import MatchMode, ScanResult, scan_files_process
 
 # Recycle each worker after this many files so any per-file memory that a
 # parsing library doesn't fully release (observed with pdfminer.six on large
 # PDF batches) can't accumulate across the life of a long-running scan.
 MAX_TASKS_PER_CHILD = 50
 ERROR_CELL_COLOR = QColor('orange')
+INVALID_REGEX_COLOR = QColor('#f8d7da')
 
 
 class ScanWorker(QThread):
     result_ready = pyqtSignal(object)
     finished_scanning = pyqtSignal()
 
-    def __init__(self, keywords, file_names, parent=None):
+    def __init__(self, keywords, file_names, mode=MatchMode.SUBSTRING, parent=None):
         super().__init__(parent)
         self.keywords = keywords
         self.file_names = file_names
+        self.mode = mode
         self._pool = None
 
     def run(self):
         worker_count = min(cpu_count(), len(self.file_names))
-        scan = partial(scan_files_process, self.keywords)
+        scan = partial(scan_files_process, self.keywords, mode=self.mode)
         # 'spawn' (not the platform-default 'fork' on Linux) avoids worker
         # processes inheriting this QThread's/QApplication's state, which
         # otherwise deadlocks pool shutdown when a Pool is created from a
@@ -91,6 +98,13 @@ class FileScanner(QMainWindow):
         self.scan_worker = None
         self.progress_dialog = None
         self.settings = QSettings('file-scanner', 'FileScanner')
+        geometry = self.settings.value('window_geometry')
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+
+    def closeEvent(self, event):
+        self.settings.setValue('window_geometry', self.saveGeometry())
+        super().closeEvent(event)
 
     def _last_dir(self):
         return self.settings.value('last_dir', '.')
@@ -108,10 +122,14 @@ class FileScanner(QMainWindow):
         self.remove_files.setDisabled(True)
         self.remove_files.clicked.connect(self.remove_files_clicked)
         top_buttons.addWidget(self.remove_files)
-        self.export_results = QPushButton('Export Results')
+        self.export_results = QPushButton('Export to CSV')
         self.export_results.setDisabled(True)
         self.export_results.clicked.connect(self.export_results_clicked)
         top_buttons.addWidget(self.export_results)
+        self.export_excel = QPushButton('Export to Excel')
+        self.export_excel.setDisabled(True)
+        self.export_excel.clicked.connect(self.export_excel_clicked)
+        top_buttons.addWidget(self.export_excel)
         vertical.addLayout(top_buttons)
         self.files = QTableWidget()
         self.files.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -157,6 +175,37 @@ class FileScanner(QMainWindow):
         except OSError as exc:
             QMessageBox.critical(self, 'Export Failed', f'Could not write results:\n{exc}')
 
+    def export_excel_clicked(self):
+        target_path = QFileDialog.getSaveFileName(self, 'Export Results', self._last_dir(), 'Excel Workbook (*.xlsx)')[
+            0
+        ]
+        if not target_path:
+            return
+        self._remember_dir(target_path)
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = 'Results'
+        sheet.append(self.file_headers)
+        for row in range(self.files.rowCount()):
+            values = []
+            fills = []
+            for column in range(self.files.columnCount()):
+                item = self.files.item(row, column)
+                values.append(item.text() if item else '')
+                fills.append(item.background().color() if item else None)
+            sheet.append(values)
+            excel_row = row + 2  # header occupies row 1
+            for column, color in enumerate(fills, start=1):
+                if color is not None and color.isValid() and color.alpha() > 0:
+                    hex_color = color.name(QColor.NameFormat.HexRgb).lstrip('#').upper()
+                    sheet.cell(row=excel_row, column=column).fill = PatternFill(
+                        start_color=hex_color, end_color=hex_color, fill_type='solid'
+                    )
+        try:
+            workbook.save(target_path)
+        except OSError as exc:
+            QMessageBox.critical(self, 'Export Failed', f'Could not write results:\n{exc}')
+
     def save_keywords_clicked(self):
         target_path = QFileDialog.getSaveFileName(self, 'Save Keywords', self._last_dir(), 'Text (*.txt)')[0]
         if not target_path:
@@ -181,15 +230,29 @@ class FileScanner(QMainWindow):
             QMessageBox.critical(self, 'Load Failed', f'Could not load keywords:\n{exc}')
             return
         self.keyword_list.addItems(loaded_keywords)
+        self._refresh_keyword_validity_highlighting()
         self.update_file_headers()
         if self.keyword_list.count():
             self.save_keywords.setDisabled(False)
         self.update_scan_button_state()
 
+    def _match_mode(self):
+        return self.match_mode_combo.currentData()
+
     def scan_files_clicked(self):
         if not self.file_names:
             return
         keywords = [self.keyword_list.item(i).text().lower() for i in range(self.keyword_list.count())]
+        mode = self._match_mode()
+        if mode is MatchMode.REGEX:
+            for keyword in keywords:
+                try:
+                    re.compile(keyword)
+                except re.error as exc:
+                    QMessageBox.critical(
+                        self, 'Invalid Regex', f'Keyword "{keyword}" is not a valid regex pattern:\n{exc}'
+                    )
+                    return
         self.file_rows = {file: row for row, file in enumerate(self.file_names)}
         self.scan_errors = []
         self.scan_files.setDisabled(True)
@@ -198,7 +261,7 @@ class FileScanner(QMainWindow):
         self.progress_dialog.setWindowTitle('Scanning')
         self.progress_dialog.setMinimumDuration(0)
         self.progress_dialog.setValue(0)
-        self.scan_worker = ScanWorker(keywords, list(self.file_names), self)
+        self.scan_worker = ScanWorker(keywords, list(self.file_names), mode, self)
         self.scan_worker.result_ready.connect(self.handle_scan_result)
         self.scan_worker.finished_scanning.connect(self.handle_scan_finished)
         self.progress_dialog.canceled.connect(self.scan_worker.cancel)
@@ -225,6 +288,7 @@ class FileScanner(QMainWindow):
         self.update_scan_button_state()
         self.add_files.setDisabled(False)
         self.export_results.setDisabled(False)
+        self.export_excel.setDisabled(False)
         if self.scan_errors:
             details = '\n'.join(f'{basename(file)}: {error}' for file, error in self.scan_errors)
             QMessageBox.warning(
@@ -234,7 +298,39 @@ class FileScanner(QMainWindow):
             )
 
     def update_scan_button_state(self):
-        self.scan_files.setDisabled(not (self.file_names and self.keyword_list.count()))
+        regex_ok = self._match_mode() is not MatchMode.REGEX or self._keywords_are_valid_regex()
+        self.scan_files.setDisabled(not (self.file_names and self.keyword_list.count() and regex_ok))
+
+    @staticmethod
+    def _is_valid_regex(pattern):
+        try:
+            re.compile(pattern)
+        except re.error:
+            return False
+        return True
+
+    def _keywords_are_valid_regex(self):
+        return all(
+            self._is_valid_regex(self.keyword_list.item(i).text()) for i in range(self.keyword_list.count())
+        )
+
+    def _update_keyword_input_validity(self):
+        text = self.new_keyword_text.text()
+        invalid = self._match_mode() is MatchMode.REGEX and text and not self._is_valid_regex(text)
+        self.new_keyword_text.setStyleSheet(f'background-color: {INVALID_REGEX_COLOR.name()};' if invalid else '')
+        self.add_keyword.setDisabled(not text or invalid)
+
+    def _refresh_keyword_validity_highlighting(self):
+        regex_mode = self._match_mode() is MatchMode.REGEX
+        for i in range(self.keyword_list.count()):
+            item = self.keyword_list.item(i)
+            invalid = regex_mode and not self._is_valid_regex(item.text())
+            item.setBackground(INVALID_REGEX_COLOR if invalid else QBrush())
+
+    def _on_match_mode_changed(self):
+        self._refresh_keyword_validity_highlighting()
+        self._update_keyword_input_validity()
+        self.update_scan_button_state()
 
     def add_files_clicked(self):
         files = QFileDialog.getOpenFileNames(
@@ -281,7 +377,7 @@ class FileScanner(QMainWindow):
         horizontal = QHBoxLayout()
         self.new_keyword_text = QLineEdit()
         self.new_keyword_text.setPlaceholderText('Key word / phrase')
-        self.new_keyword_text.textEdited.connect(lambda: self.add_keyword.setDisabled(not self.new_keyword_text.text()))
+        self.new_keyword_text.textEdited.connect(self._update_keyword_input_validity)
         horizontal.addWidget(self.new_keyword_text)
         self.add_keyword = QPushButton('Add')
         self.add_keyword.setDisabled(True)
@@ -290,7 +386,19 @@ class FileScanner(QMainWindow):
         self.new_keyword_text.returnPressed.connect(self.add_keyword.click)
         vertical = QVBoxLayout()
         vertical.addLayout(horizontal)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel('Match mode:'))
+        self.match_mode_combo = QComboBox()
+        self.match_mode_combo.addItem('Substring', MatchMode.SUBSTRING)
+        self.match_mode_combo.addItem('Whole word', MatchMode.WHOLE_WORD)
+        self.match_mode_combo.addItem('Regex', MatchMode.REGEX)
+        self.match_mode_combo.currentIndexChanged.connect(self._on_match_mode_changed)
+        mode_row.addWidget(self.match_mode_combo)
+        vertical.addLayout(mode_row)
         self.keyword_list = QListWidget()
+        # No in-place editing: an edited keyword wouldn't refresh file headers,
+        # save-state, or regex-validity highlighting. Remove + re-add instead.
+        self.keyword_list.setEditTriggers(QListWidget.EditTrigger.NoEditTriggers)
         self.keyword_list.itemSelectionChanged.connect(
             lambda: self.remove_keyword.setDisabled(not self.keyword_list.selectedIndexes())
         )
@@ -303,8 +411,8 @@ class FileScanner(QMainWindow):
 
     def add_keyword_clicked(self):
         self.keyword_list.addItem(self.new_keyword_text.text())
-        self.add_keyword.setDisabled(True)
         self.new_keyword_text.setText('')
+        self._update_keyword_input_validity()
         self.update_file_headers()
         self.save_keywords.setDisabled(False)
         self.update_scan_button_state()
