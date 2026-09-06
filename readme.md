@@ -38,15 +38,15 @@ QT_QPA_PLATFORM=offscreen uv run --frozen --group test pytest -v
 uv run --frozen --group lint ruff check .
 ```
 
-## Building a Windows executable
+## Building a standalone executable
 ```bash
 uv run --group build nuitka main.py
 ```
-Build flags live as `# nuitka-project:` comments at the top of `main.py`, including
-`--low-memory`, `--lto=no`, and `--include-qt-plugins=platforms` — these keep the C-compilation
-step's memory use bounded (see CLAUDE.md for why). A GitHub Actions workflow
-(`.github/workflows/build-exe.yml`) also builds and attaches the `.exe` to GitHub Releases when a
-`v*` tag is pushed.
+Produces `main.exe` on Windows or `main.bin` on Linux. Build flags live as `# nuitka-project:`
+comments at the top of `main.py`, including `--low-memory`, `--lto=no`, and
+`--include-qt-plugins=platforms` — these keep the C-compilation step's memory use bounded (see
+CLAUDE.md for why). A GitHub Actions workflow (`.github/workflows/build-exe.yml`) also builds
+both platforms and attaches the binaries to GitHub Releases when a `v*` tag is pushed.
 
 ## Project layout
 - `main.py` — entry point, Nuitka build flags
