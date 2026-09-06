@@ -295,6 +295,39 @@ def test_export_save_dialog_appends_missing_extension(qtbot, tmp_path, monkeypat
     load_workbook(typed_path + '.xlsx')  # raises if the file wasn't created with the extension
 
 
+def test_export_excel_strips_illegal_xml_characters_from_snippets(qtbot, tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+
+    xlsx_path = str(tmp_path / 'out.xlsx')
+    monkeypatch.setattr(QFileDialog, 'getSaveFileName', staticmethod(lambda *a, **k: (xlsx_path, '')))
+
+    a_file = str(tmp_path / 'a.txt')
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.keyword_list.addItem('apple')
+    window.update_file_headers()
+    window._add_files([a_file])
+    window.files.setItem(0, 1, QTableWidgetItem('true'))
+    # A control char and the noncharacter U+FFFE - both illegal in XML 1.0.
+    # pypdfium2 can produce these as decoding garbage from a real PDF; this
+    # simulates that without needing to craft one.
+    illegal_snippet = 'before' + chr(0x00) + 'after' + chr(0xFFFE) + 'end'
+    window.file_occurrences[a_file] = [[Occurrence(page=1, snippet=illegal_snippet)]]
+
+    def fake_exec(self):
+        for checkbox in self.findChildren(QCheckBox):
+            checkbox.setChecked(True)
+        return QDialog.DialogCode.Accepted
+
+    with patch.object(QDialog, 'exec', fake_exec):
+        window.export_excel_clicked()  # must not raise, and must produce a loadable file
+
+    workbook = load_workbook(xlsx_path)  # raises if the file is corrupt
+    sheet = workbook.active
+    snippet_cell = sheet.cell(row=2, column=4).value  # File, apple, apple (page), apple (snippet)
+    assert snippet_cell == 'beforeafterend'
+
+
 def test_ask_export_extra_columns_skips_dialog_when_no_occurrences(qtbot, monkeypatch):
     window = FileScanner()
     qtbot.addWidget(window)

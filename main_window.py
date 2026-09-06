@@ -38,6 +38,22 @@ from options_dialog import Options
 from scanner import MatchMode, ScanResult, scan_files_process
 
 FILE_PATH_ROLE = Qt.ItemDataRole.UserRole
+# First-line marker in a saved keyword file recording which MatchMode it was
+# authored in - a plain-text keyword like '\d{4,}' is meaningless without
+# knowing it was meant as a regex.
+MATCH_MODE_MARKER_PREFIX = '# match_mode: '
+# Characters XML 1.0 forbids outright - extracted file text (PDFs especially)
+# can contain these as decoding/font-substitution garbage, and openpyxl
+# writes cell text straight into XML with no sanitizing of its own, so an
+# un-stripped one produces a .xlsx that's corrupt (not even openpyxl itself
+# can re-open it - confirmed directly against a real exported file that hit
+# this).
+_ILLEGAL_XML_CODEPOINTS = [*range(0x09), 0x0B, 0x0C, *range(0x0E, 0x20), 0x7F, 0xFFFE, 0xFFFF]
+_ILLEGAL_XML_CHARS_RE = re.compile('[' + re.escape(''.join(chr(c) for c in _ILLEGAL_XML_CODEPOINTS)) + ']')
+
+
+def _sanitize_for_xlsx(values):
+    return [_ILLEGAL_XML_CHARS_RE.sub('', value) for value in values]
 
 # Recycle each worker after this many files so any per-file memory that a
 # parsing library doesn't fully release (observed with pdfminer.six on large
@@ -121,6 +137,7 @@ class FileScanner(QMainWindow):
         self.settings = QSettings('file-scanner', 'FileScanner')
         self.options = Options(self)
         self._load_display_options()
+        self._load_match_mode()
         geometry = self.settings.value('window_geometry')
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -155,9 +172,23 @@ class FileScanner(QMainWindow):
         for key in self._DISPLAY_TEXT_KEYS:
             self.settings.setValue(f'display/{key}', getattr(display, key))
 
+    def _load_match_mode(self):
+        value = self.settings.value('match_mode')
+        if not value:
+            return
+        try:
+            mode = MatchMode(value)
+        except ValueError:
+            return
+        self.match_mode_combo.setCurrentIndex(self.match_mode_combo.findData(mode))
+
+    def _save_match_mode(self):
+        self.settings.setValue('match_mode', self._match_mode().value)
+
     def closeEvent(self, event):
         self.settings.setValue('window_geometry', self.saveGeometry())
         self._save_display_options()
+        self._save_match_mode()
         super().closeEvent(event)
 
     def _last_dir(self):
@@ -317,10 +348,10 @@ class FileScanner(QMainWindow):
         sheet = workbook.active
         sheet.title = 'Results'
         rows = self._export_rows(*extra_columns)
-        sheet.append(next(rows))
+        sheet.append(_sanitize_for_xlsx(next(rows)))
         keyword_count = self.keyword_list.count()
         for excel_row, values in enumerate(rows, start=2):
-            sheet.append(values)
+            sheet.append(_sanitize_for_xlsx(values))
             # Only the keyword-result columns (not the filename, and not any
             # extra page/snippet columns) carry a found/missing/error color.
             for column in range(1, keyword_count + 1):
@@ -341,11 +372,13 @@ class FileScanner(QMainWindow):
         target_path = QFileDialog.getSaveFileName(self, 'Save Keywords', self._last_dir(), 'Text (*.txt)')[0]
         if not target_path:
             return
+        target_path = self._ensure_extension(target_path, '.txt')
         self._remember_dir(target_path)
         keywords = [self.keyword_list.item(i).text() for i in range(self.keyword_list.count())]
+        lines = [f'{MATCH_MODE_MARKER_PREFIX}{self._match_mode().value}', *keywords]
         try:
             with open(target_path, 'wt') as keywords_file:
-                keywords_file.write('\n'.join(keywords) + '\n')
+                keywords_file.write('\n'.join(lines) + '\n')
         except OSError as exc:
             QMessageBox.critical(self, 'Save Failed', f'Could not save keywords:\n{exc}')
 
@@ -356,11 +389,24 @@ class FileScanner(QMainWindow):
         self._remember_dir(source_path)
         try:
             with open(source_path, 'rt') as keywords_file:
-                loaded_keywords = [line for line in keywords_file.read().split('\n') if line]
+                lines = [line for line in keywords_file.read().split('\n') if line]
         except OSError as exc:
             QMessageBox.critical(self, 'Load Failed', f'Could not load keywords:\n{exc}')
             return
-        self.keyword_list.addItems(loaded_keywords)
+        # A saved keyword list carries its match mode as an optional marker on
+        # the first line - a plain keyword list (no marker, e.g. hand-written
+        # or saved before this existed) leaves whatever mode is already active
+        # alone rather than resetting it.
+        if lines and lines[0].startswith(MATCH_MODE_MARKER_PREFIX):
+            mode_value = lines[0][len(MATCH_MODE_MARKER_PREFIX):]
+            lines = lines[1:]
+            try:
+                mode = MatchMode(mode_value)
+            except ValueError:
+                mode = None
+            if mode is not None:
+                self.match_mode_combo.setCurrentIndex(self.match_mode_combo.findData(mode))
+        self.keyword_list.addItems(lines)
         self._refresh_keyword_validity_highlighting()
         self.update_file_headers()
         if self.keyword_list.count():
