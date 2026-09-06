@@ -16,7 +16,8 @@ keywords, showing a found/missing grid you can export to CSV.
   where the format supports one)
 - Sort results by clicking a column header, or filter rows by typing in the filter box
 - Double-click a row to open that file in its default app
-- Export results to CSV or a color-coded `.xlsx` workbook
+- Export results to CSV or a color-coded `.xlsx` workbook, optionally with page-number/snippet
+  columns added
 - Customizable found/missing/scan-error colors and labels (Options dialog), persisted across runs
 - Remembers the last-used directory across file dialogs and the window's size/position across runs
 - Has an actual app/taskbar icon instead of the default Qt one

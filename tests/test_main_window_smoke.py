@@ -1,11 +1,12 @@
 from os.path import normpath
+from unittest.mock import patch
 
 from PyQt6.QtCore import QMimeData, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices
-from PyQt6.QtWidgets import QFileDialog, QMessageBox, QTableWidgetItem
+from PyQt6.QtWidgets import QCheckBox, QDialog, QFileDialog, QMessageBox, QTableWidgetItem
 
 from main_window import FILE_PATH_ROLE, FileScanner
-from scanner import MatchMode
+from scanner import MatchMode, Occurrence
 
 
 class FakeDropEvent:
@@ -276,6 +277,67 @@ def test_export_excel_writes_workbook_with_colors(qtbot, tmp_path, monkeypatch):
     assert [cell.value for cell in sheet[2]] == ['good.txt', 'true']
     hex_color = window.options.display.found_color.name(QColor.NameFormat.HexRgb).lstrip('#').upper()
     assert hex_color in sheet.cell(row=2, column=2).fill.fgColor.rgb.upper()
+    # the filename column never has an explicit background set - it must not
+    # get colored just because an unset QBrush reports an opaque black color
+    assert sheet.cell(row=2, column=1).fill.fill_type is None
+
+
+def test_export_save_dialog_appends_missing_extension(qtbot, tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+
+    typed_path = str(tmp_path / 'results')  # no extension typed
+    monkeypatch.setattr(QFileDialog, 'getSaveFileName', staticmethod(lambda *a, **k: (typed_path, '')))
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.export_excel_clicked()
+
+    load_workbook(typed_path + '.xlsx')  # raises if the file wasn't created with the extension
+
+
+def test_ask_export_extra_columns_skips_dialog_when_no_occurrences(qtbot, monkeypatch):
+    window = FileScanner()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(QDialog, 'exec', lambda self: (_ for _ in ()).throw(AssertionError('dialog should not show')))
+
+    assert window._ask_export_extra_columns() == (False, False)
+
+
+def test_ask_export_extra_columns_returns_checked_state(qtbot, tmp_path):
+    a_file = str(tmp_path / 'a.txt')
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.file_occurrences[a_file] = [[Occurrence(page=1, snippet='hello')]]
+
+    def fake_exec(self):
+        for checkbox in self.findChildren(QCheckBox):
+            checkbox.setChecked(True)
+        return QDialog.DialogCode.Accepted
+
+    with patch.object(QDialog, 'exec', fake_exec):
+        assert window._ask_export_extra_columns() == (True, True)
+
+    with patch.object(QDialog, 'exec', lambda self: QDialog.DialogCode.Rejected):
+        assert window._ask_export_extra_columns() is None
+
+
+def test_export_rows_include_page_and_snippet_columns(qtbot, tmp_path):
+    path = tmp_path / 'notes.txt'
+    path.write_text('apple pie')
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.keyword_list.addItem('apple')
+    window.update_file_headers()
+    window._add_files([str(path)])
+    window.file_occurrences[str(path)] = [[Occurrence(page=None, snippet='apple pie')]]
+    window.files.setItem(0, 1, QTableWidgetItem('true'))
+
+    rows = list(window._export_rows(include_pages=True, include_snippets=True))
+
+    assert rows[0] == ['File', 'apple', 'apple (page)', 'apple (snippet)']
+    assert rows[1] == ['notes.txt', 'true', '', 'apple pie']
 
 
 def test_window_geometry_persists_across_instances(qtbot):

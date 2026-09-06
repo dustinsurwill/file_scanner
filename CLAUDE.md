@@ -124,6 +124,20 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
   rather than collecting every match unconditionally — a common word or a pathological regex
   matching at many/most positions in a large file must not blow up per-file scan time or tooltip
   size.
+- `export_excel_clicked`'s cell-fill check must test `brush.style() == Qt.BrushStyle.NoBrush`, not
+  `color.isValid() and color.alpha() > 0` — a `QTableWidgetItem` with no background ever set still
+  reports its background color as opaque black (`alpha=255`, a "valid" `QColor`); only the brush
+  *style* actually distinguishes "no background was set" from "black was explicitly set" (this was
+  a real shipped bug: the filename column, which never gets a background, was rendering solid
+  black in every exported `.xlsx`). Confirmed directly with a throwaway `QTableWidgetItem` — don't
+  trust `color.alpha()` for this again.
+- `self.file_occurrences: dict[str, list[list[Occurrence]]]` mirrors `self.file_items` — same
+  reset points (cleared at scan start, populated per-file in `handle_scan_result`, popped in
+  `remove_files_clicked`) — and is what `_ask_export_extra_columns`/`_export_rows` use to offer
+  page-number/snippet columns on export. Keep it in sync wherever `file_items` is touched.
+- `export_results_clicked`/`export_excel_clicked` both call `_ensure_extension` before writing —
+  native save dialogs (particularly on Linux) don't reliably append the filter's extension if the
+  user types a bare filename, so the code must not assume `target_path` already has one.
 
 ## Tests
 - `tests/conftest.py` has an autouse `isolated_qsettings` fixture that monkeypatches
