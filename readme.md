@@ -6,7 +6,8 @@ keywords, showing a found/missing grid you can export to CSV.
 ## Features
 - Add files via a file picker or by dragging them onto the window
 - Remove selected files from the batch without starting over
-- Add/remove/save/load keyword lists
+- Add/remove/save/load keyword lists (a saved list remembers its match mode, so a regex list
+  loads back as regex instead of silently becoming literal substrings)
 - Match keywords as a substring, whole word, or regex pattern, with invalid regex patterns
   flagged live and blocked from starting a scan
 - Scan runs on a background process pool so the UI stays responsive, with a progress dialog you

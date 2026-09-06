@@ -135,9 +135,26 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
   reset points (cleared at scan start, populated per-file in `handle_scan_result`, popped in
   `remove_files_clicked`) — and is what `_ask_export_extra_columns`/`_export_rows` use to offer
   page-number/snippet columns on export. Keep it in sync wherever `file_items` is touched.
-- `export_results_clicked`/`export_excel_clicked` both call `_ensure_extension` before writing —
-  native save dialogs (particularly on Linux) don't reliably append the filter's extension if the
-  user types a bare filename, so the code must not assume `target_path` already has one.
+- `export_results_clicked`/`export_excel_clicked`/`save_keywords_clicked` all call
+  `_ensure_extension` before writing — native save dialogs (particularly on Linux) don't reliably
+  append the filter's extension if the user types a bare filename, so the code must not assume
+  `target_path` already has one. Any future save-file dialog needs the same treatment.
+- `export_excel_clicked` runs every row through `_sanitize_for_xlsx` before `sheet.append(...)` —
+  extracted PDF text can contain characters XML 1.0 forbids outright (control chars, and
+  noncharacters like `U+FFFE`) as decoding/font-substitution garbage, and openpyxl writes cell
+  text straight into XML with no sanitizing of its own. Confirmed directly against a real
+  user-exported file that hit this: the resulting `.xlsx` was corrupt enough that openpyxl
+  couldn't even re-open its own output. This became reachable once snippets (raw extracted text)
+  started flowing into export cells — CSV isn't affected (no XML well-formedness constraint), so
+  the sanitizing only happens in the xlsx path, not in the shared `_export_rows` generator.
+- Match mode (`MatchMode`) has two independent persistence paths, both needed:
+  `_load_match_mode`/`_save_match_mode` (via `QSettings`, alongside display options/geometry —
+  survives an app restart) and the `MATCH_MODE_MARKER_PREFIX` first line in a saved keyword file
+  (survives loading that *specific* file into a session currently in a different mode). Before
+  either existed, saving a keyword list built in Regex mode and loading it back later silently
+  reinterpreted patterns like `\d{4,}` as literal (near-never-matching) substrings — a real
+  shipped bug. A keyword file without the marker line (hand-written, or saved before this existed)
+  intentionally leaves whatever mode is already active alone rather than resetting it.
 
 ## Tests
 - `tests/conftest.py` has an autouse `isolated_qsettings` fixture that monkeypatches
