@@ -1,5 +1,6 @@
 import re
 from bisect import bisect_right
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -32,6 +33,33 @@ class ScanResult:
     occurrences: list[list[Occurrence]] | None = None
     truncated: list[bool] | None = None
     error: str | None = None
+
+
+def disambiguate_labels(paths: list[str]) -> dict[str, str]:
+    """Map each path to a display label. A path whose file name is unique in the
+    list gets just that name; paths that share a file name get the shortest
+    trailing fragment of their path that tells them apart (prefixed with '…/'
+    when it isn't the whole path), e.g. '…/2023/report.pdf' vs '…/2024/report.pdf'.
+    """
+    groups: dict[str, list[str]] = defaultdict(list)
+    for path in paths:
+        groups[Path(path).name].append(path)
+    labels: dict[str, str] = {}
+    for name, group in groups.items():
+        if len(group) == 1:
+            labels[group[0]] = name
+            continue
+        parts_by_path = {path: Path(path).parts for path in group}
+        for path, parts in parts_by_path.items():
+            label = path  # fallback for genuinely identical paths (e.g. added twice)
+            for depth in range(2, len(parts) + 1):
+                tail = parts[-depth:]
+                if sum(1 for other in parts_by_path.values() if other[-depth:] == tail) == 1:
+                    joined = '/'.join(tail)
+                    label = joined if depth == len(parts) else f'…/{joined}'
+                    break
+            labels[path] = label
+    return labels
 
 
 def extract_text(file: str) -> tuple[str, list[int] | None]:

@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
 )
 
 from options_dialog import Options
-from scanner import MatchMode, ScanResult, scan_files_process
+from scanner import MatchMode, ScanResult, disambiguate_labels, scan_files_process
 
 FILE_PATH_ROLE = Qt.ItemDataRole.UserRole
 # First-line marker in a saved keyword file recording which MatchMode it was
@@ -313,7 +313,9 @@ class FileScanner(QMainWindow):
         of the filter) row order."""
         keyword_count = self.keyword_list.count()
         keywords = self.file_headers[1:]
-        headers = list(self.file_headers)
+        # A 'Path' column always follows the file name: when files from different
+        # folders share a name, the name alone doesn't say which one a row is.
+        headers = [self.file_headers[0], 'Path', *keywords]
         if include_pages:
             headers += [f'{keyword} (page)' for keyword in keywords]
         if include_snippets:
@@ -322,7 +324,7 @@ class FileScanner(QMainWindow):
         for row in range(self.files.rowCount()):
             file = self.files.item(row, 0).data(FILE_PATH_ROLE)
             occurrences = self.file_occurrences.get(file)
-            values = [self.files.item(row, 0).text()] + [
+            values = [self.files.item(row, 0).text(), file or ''] + [
                 self.files.item(row, i + 1).text() for i in range(keyword_count)
             ]
             if include_pages:
@@ -369,15 +371,18 @@ class FileScanner(QMainWindow):
         keyword_count = self.keyword_list.count()
         for excel_row, values in enumerate(rows, start=2):
             sheet.append(_sanitize_for_xlsx(values))
-            # Only the keyword-result columns (not the filename, and not any
-            # extra page/snippet columns) carry a found/missing/error color.
+            # Only the keyword-result columns (not the filename, not the Path
+            # column, and not any extra page/snippet columns) carry a
+            # found/missing/error color. `column` indexes the results table (col 0
+            # is the name); the sheet has an extra 'Path' column inserted at
+            # position 2, so the sheet column is `column + 2`.
             for column in range(1, keyword_count + 1):
                 item = self.files.item(excel_row - 2, column)
                 brush = item.background() if item else QBrush()
                 if brush.style() == Qt.BrushStyle.NoBrush:
                     continue
                 hex_color = brush.color().name(QColor.NameFormat.HexRgb).lstrip('#').upper()
-                sheet.cell(row=excel_row, column=column + 1).fill = PatternFill(
+                sheet.cell(row=excel_row, column=column + 2).fill = PatternFill(
                     start_color=hex_color, end_color=hex_color, fill_type='solid'
                 )
         try:
@@ -586,9 +591,23 @@ class FileScanner(QMainWindow):
             self.files.setItem(i + count, 0, item)
             self.file_items[file] = item
         self.files.setSortingEnabled(was_sorting)
+        self._refresh_file_labels()
         self.files.resizeColumnsToContents()
         self.update_scan_button_state()
         self._apply_filter()
+
+    def _refresh_file_labels(self):
+        """Set each row's file-name cell to a label that disambiguates files
+        sharing a base name (from different folders), and put the full path in
+        the cell tooltip. Recompute in full: adding or removing a file can turn
+        a collision into a unique name or vice versa."""
+        labels = disambiguate_labels(self.file_names)
+        was_sorting = self.files.isSortingEnabled()
+        self.files.setSortingEnabled(False)
+        for file, item in self.file_items.items():
+            item.setText(labels[file])
+            item.setToolTip(file)
+        self.files.setSortingEnabled(was_sorting)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -611,6 +630,7 @@ class FileScanner(QMainWindow):
             self.file_occurrences.pop(file, None)
             self.files.removeRow(row)
         self.remove_files.setDisabled(True)
+        self._refresh_file_labels()
         self.update_scan_button_state()
 
     def _apply_filter(self, *_args):
