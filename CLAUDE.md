@@ -97,16 +97,31 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
   it later. The fix in place: each row's file path lives in `Qt.ItemDataRole.UserRole`
   (`FILE_PATH_ROLE`) on its column-0 item, and `self.file_items: dict[str, QTableWidgetItem]` maps
   file → that item; `item.row()` always reflects the item's *current* visual position, so
-  `handle_scan_result` looks up `self.file_items[result.file].row()` fresh each time rather than
+  `_apply_scan_result` looks up `self.file_items[result.file].row()` fresh each time rather than
   trusting a row captured earlier. `remove_files_clicked` reads the file off the row via
   `FILE_PATH_ROLE` and removes it from `file_names` by value (`list.remove`), never by position.
   Any new code touching `self.files` must follow the same rule.
+- Column-0 cell text is a *display label* from `scanner.disambiguate_labels`, not always
+  `basename` — files sharing a base name across folders show a distinguishing path tail
+  (`…/2023/report.pdf`); the real path stays in `FILE_PATH_ROLE` and the cell tooltip.
+  `_refresh_file_labels()` must run wherever `file_names`/`file_items` change (`_add_files`,
+  `remove_files_clicked`) — a removal can turn a collision back into a bare name. Tests asserting
+  column-0 text must use unique base names.
 - Sorting is deliberately turned off for the duration of a scan (`scan_files_clicked` /
   `handle_scan_finished`) — leaving it on would re-sort on every single incoming result (visible
   row-jumping mid-scan, and O(n² log n) work on the ~9000-file batches this app has hit before).
   It's re-enabled once the scan finishes. `_add_files` similarly disables sorting for its own bulk
   insert and restores whatever the setting was before (avoids an O(n log n) resort per appended
   row).
+- Result columns must NOT use `QHeaderView.ResizeMode.ResizeToContents` — Qt re-measures the whole
+  column on every `setItem` (O(rows) per cell write), which froze the window mid-scan on ~7k-file
+  batches. Columns stay `Interactive`; `self.files.resizeColumnsToContents()` runs once after bulk
+  changes (`_add_files`, `handle_scan_finished`) instead.
+- `ScanWorker` delivers results to the GUI thread in batches (`results_ready = pyqtSignal(list)`),
+  batch size = `len(file_names) * RESULTS_BATCH_FRACTION` clamped to `[1, RESULTS_BATCH_MAX]`, with
+  one `setUpdatesEnabled(False)` block + one progress tick per batch — a per-file signal storm was
+  the other half of the large-batch freeze. `run()` flushes the remainder before finishing and on
+  cancel.
 - The results-table filter (`self.filter_text` / `_apply_filter`) recomputes row visibility from
   each row's current cell content every time it runs, rather than tracking anything by row index —
   this is what keeps it correct regardless of what sorting did to row order, without needing to
@@ -132,9 +147,12 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
   black in every exported `.xlsx`). Confirmed directly with a throwaway `QTableWidgetItem` — don't
   trust `color.alpha()` for this again.
 - `self.file_occurrences: dict[str, list[list[Occurrence]]]` mirrors `self.file_items` — same
-  reset points (cleared at scan start, populated per-file in `handle_scan_result`, popped in
+  reset points (cleared at scan start, populated per-file in `_apply_scan_result`, popped in
   `remove_files_clicked`) — and is what `_ask_export_extra_columns`/`_export_rows` use to offer
   page-number/snippet columns on export. Keep it in sync wherever `file_items` is touched.
+- `_export_rows` always emits a `Path` column (full path) as column 2, right after the name, for
+  both CSV and xlsx. `export_excel_clicked`'s colour-fill loop therefore writes sheet `column + 2`
+  (table col index + name col + Path col), not `+ 1`.
 - `export_results_clicked`/`export_excel_clicked`/`save_keywords_clicked` all call
   `_ensure_extension` before writing — native save dialogs (particularly on Linux) don't reliably
   append the filter's extension if the user types a bare filename, so the code must not assume
@@ -170,6 +188,9 @@ tests/lint/build so `uv.lock` isn't silently regenerated — regenerate it delib
 - `tests/conftest.py`'s `make_multipage_pdf` (used by the `multipage_pdf_file`/
   `split_phrase_pdf_file` fixtures) calls `canvas.showPage()` between pages — needed for a
   genuinely multi-page PDF; `make_pdf`'s single `drawString` call only ever produces one page.
+- `QProgressDialog.value()` returns `-1` after `.close()` — `handle_scan_finished` closes the
+  dialog, so don't assert a final progress value post-scan; assert via the emitted batches.
+- openpyxl reads an empty-string cell back as `None` (not `''`) when round-tripping an export.
 - `QTableWidget.setSortingEnabled(True)` does not itself trigger a sort — confirmed directly (see
   a throwaway repro in this session's history): rows stay in insertion order until a header is
   actually clicked or `sortItems()` is called, even when re-enabling sorting after a bulk insert
