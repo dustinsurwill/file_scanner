@@ -94,6 +94,47 @@ def test_scan_populates_results_and_reports_per_file_errors(qtbot, tmp_path, mon
     assert window.scan_files.isEnabled()
 
 
+def test_scan_delivers_results_in_batches_and_populates_every_row(qtbot, tmp_path, monkeypatch):
+    # Force a tiny batch so a handful of files still spans several batches.
+    monkeypatch.setattr('main_window.RESULTS_BATCH_FRACTION', 0.25)
+
+    files = []
+    has_apple = {}
+    for i in range(8):
+        path = tmp_path / f'doc{i}.txt'
+        path.write_text('apple' if i % 2 else 'orange')
+        files.append(str(path))
+        has_apple[str(path)] = bool(i % 2)
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.keyword_list.addItem('apple')
+    window.update_file_headers()
+    window._add_files(files)
+    window.scan_files.setDisabled(False)
+
+    batch_sizes = []
+    original = window.handle_scan_batch
+
+    def spy(results):
+        batch_sizes.append(len(results))
+        original(results)
+
+    monkeypatch.setattr(window, 'handle_scan_batch', spy)
+
+    window.scan_files_clicked()
+    qtbot.waitUntil(lambda: not window.scan_worker.isRunning(), timeout=15000)
+    qtbot.wait(50)
+
+    assert sum(batch_sizes) == len(files)
+    assert len(batch_sizes) > 1  # delivered in batches, not one giant emission
+    assert max(batch_sizes) <= 2  # batch_size == int(8 * 0.25)
+    for row in range(window.files.rowCount()):
+        file = window.files.item(row, 0).data(FILE_PATH_ROLE)
+        expected = 'true' if has_apple[file] else 'false'
+        assert window.files.item(row, 1).text() == expected
+
+
 def test_remove_files_clicked_removes_selected_rows(qtbot, tmp_path):
     a_file = str(tmp_path / 'a.txt')
     b_file = str(tmp_path / 'b.txt')
@@ -273,13 +314,15 @@ def test_export_excel_writes_workbook_with_colors(qtbot, tmp_path, monkeypatch):
 
     workbook = load_workbook(xlsx_path)
     sheet = workbook.active
-    assert [cell.value for cell in sheet[1]] == ['File', 'apple']
-    assert [cell.value for cell in sheet[2]] == ['good.txt', 'true']
+    assert [cell.value for cell in sheet[1]] == ['File', 'Path', 'apple']
+    # this row was built without a FILE_PATH_ROLE, so Path is blank (openpyxl reads '' back as None)
+    assert [cell.value for cell in sheet[2]] == ['good.txt', None, 'true']
     hex_color = window.options.display.found_color.name(QColor.NameFormat.HexRgb).lstrip('#').upper()
-    assert hex_color in sheet.cell(row=2, column=2).fill.fgColor.rgb.upper()
-    # the filename column never has an explicit background set - it must not
-    # get colored just because an unset QBrush reports an opaque black color
+    assert hex_color in sheet.cell(row=2, column=3).fill.fgColor.rgb.upper()
+    # the filename and Path columns never have an explicit background set - they
+    # must not get colored just because an unset QBrush reports an opaque black
     assert sheet.cell(row=2, column=1).fill.fill_type is None
+    assert sheet.cell(row=2, column=2).fill.fill_type is None
 
 
 def test_export_save_dialog_appends_missing_extension(qtbot, tmp_path, monkeypatch):
@@ -324,7 +367,8 @@ def test_export_excel_strips_illegal_xml_characters_from_snippets(qtbot, tmp_pat
 
     workbook = load_workbook(xlsx_path)  # raises if the file is corrupt
     sheet = workbook.active
-    snippet_cell = sheet.cell(row=2, column=4).value  # File, apple, apple (page), apple (snippet)
+    # File, Path, apple, apple (page), apple (snippet)
+    snippet_cell = sheet.cell(row=2, column=5).value
     assert snippet_cell == 'beforeafterend'
 
 
@@ -369,8 +413,50 @@ def test_export_rows_include_page_and_snippet_columns(qtbot, tmp_path):
 
     rows = list(window._export_rows(include_pages=True, include_snippets=True))
 
-    assert rows[0] == ['File', 'apple', 'apple (page)', 'apple (snippet)']
-    assert rows[1] == ['notes.txt', 'true', '', 'apple pie']
+    assert rows[0] == ['File', 'Path', 'apple', 'apple (page)', 'apple (snippet)']
+    assert rows[1] == ['notes.txt', str(path), 'true', '', 'apple pie']
+
+
+def test_same_named_files_get_disambiguated_labels_and_path_tooltip(qtbot, tmp_path):
+    (tmp_path / 'x').mkdir()
+    (tmp_path / 'y').mkdir()
+    file_x = tmp_path / 'x' / 'report.txt'
+    file_x.write_text('a')
+    file_y = tmp_path / 'y' / 'report.txt'
+    file_y.write_text('b')
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window._add_files([str(file_x), str(file_y)])
+
+    texts = {window.files.item(row, 0).text() for row in range(window.files.rowCount())}
+    assert len(texts) == 2
+    assert all(text.endswith('report.txt') and text != 'report.txt' for text in texts)
+    for row in range(window.files.rowCount()):
+        item = window.files.item(row, 0)
+        assert item.toolTip() == item.data(FILE_PATH_ROLE)
+
+
+def test_removing_a_collision_restores_the_bare_name(qtbot, tmp_path):
+    (tmp_path / 'x').mkdir()
+    (tmp_path / 'y').mkdir()
+    file_x = tmp_path / 'x' / 'report.txt'
+    file_x.write_text('a')
+    file_y = tmp_path / 'y' / 'report.txt'
+    file_y.write_text('b')
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window._add_files([str(file_x), str(file_y)])
+
+    for row in range(window.files.rowCount()):
+        if window.files.item(row, 0).data(FILE_PATH_ROLE) == str(file_y):
+            window.files.selectRow(row)
+            break
+    window.remove_files_clicked()
+
+    assert window.files.rowCount() == 1
+    assert window.files.item(0, 0).text() == 'report.txt'
 
 
 def test_window_geometry_persists_across_instances(qtbot):

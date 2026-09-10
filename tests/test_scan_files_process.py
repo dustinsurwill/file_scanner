@@ -196,3 +196,30 @@ def test_phrase_split_across_pdf_page_break_still_matches(split_phrase_pdf_file)
     assert result.error is None
     assert result.matches == [True]
     assert len(result.occurrences[0]) == 1
+
+
+def test_disambiguate_labels_keeps_unique_names_bare():
+    from scanner import disambiguate_labels
+
+    labels = disambiguate_labels(['/home/a/report.pdf', '/home/b/notes.txt'])
+
+    assert labels == {'/home/a/report.pdf': 'report.pdf', '/home/b/notes.txt': 'notes.txt'}
+
+
+def test_disambiguate_labels_adds_minimal_path_fragment_on_collision():
+    from scanner import disambiguate_labels
+
+    labels = disambiguate_labels(['/data/2023/report.pdf', '/data/2024/report.pdf', '/other/notes.txt'])
+
+    assert labels['/data/2023/report.pdf'] == '…/2023/report.pdf'
+    assert labels['/data/2024/report.pdf'] == '…/2024/report.pdf'
+    assert labels['/other/notes.txt'] == 'notes.txt'
+
+
+def test_disambiguate_labels_walks_further_up_when_needed():
+    from scanner import disambiguate_labels
+
+    labels = disambiguate_labels(['/a/q1/data/report.pdf', '/b/q1/data/report.pdf'])
+
+    assert labels['/a/q1/data/report.pdf'] == '…/a/q1/data/report.pdf'
+    assert labels['/b/q1/data/report.pdf'] == '…/b/q1/data/report.pdf'
