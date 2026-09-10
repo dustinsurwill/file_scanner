@@ -94,6 +94,47 @@ def test_scan_populates_results_and_reports_per_file_errors(qtbot, tmp_path, mon
     assert window.scan_files.isEnabled()
 
 
+def test_scan_delivers_results_in_batches_and_populates_every_row(qtbot, tmp_path, monkeypatch):
+    # Force a tiny batch so a handful of files still spans several batches.
+    monkeypatch.setattr('main_window.RESULTS_BATCH_FRACTION', 0.25)
+
+    files = []
+    has_apple = {}
+    for i in range(8):
+        path = tmp_path / f'doc{i}.txt'
+        path.write_text('apple' if i % 2 else 'orange')
+        files.append(str(path))
+        has_apple[str(path)] = bool(i % 2)
+
+    window = FileScanner()
+    qtbot.addWidget(window)
+    window.keyword_list.addItem('apple')
+    window.update_file_headers()
+    window._add_files(files)
+    window.scan_files.setDisabled(False)
+
+    batch_sizes = []
+    original = window.handle_scan_batch
+
+    def spy(results):
+        batch_sizes.append(len(results))
+        original(results)
+
+    monkeypatch.setattr(window, 'handle_scan_batch', spy)
+
+    window.scan_files_clicked()
+    qtbot.waitUntil(lambda: not window.scan_worker.isRunning(), timeout=15000)
+    qtbot.wait(50)
+
+    assert sum(batch_sizes) == len(files)
+    assert len(batch_sizes) > 1  # delivered in batches, not one giant emission
+    assert max(batch_sizes) <= 2  # batch_size == int(8 * 0.25)
+    for row in range(window.files.rowCount()):
+        file = window.files.item(row, 0).data(FILE_PATH_ROLE)
+        expected = 'true' if has_apple[file] else 'false'
+        assert window.files.item(row, 1).text() == expected
+
+
 def test_remove_files_clicked_removes_selected_rows(qtbot, tmp_path):
     a_file = str(tmp_path / 'a.txt')
     b_file = str(tmp_path / 'b.txt')

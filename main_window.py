@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -59,6 +58,13 @@ def _sanitize_for_xlsx(values):
 # parsing library doesn't fully release (observed with pdfminer.six on large
 # PDF batches) can't accumulate across the life of a long-running scan.
 MAX_TASKS_PER_CHILD = 50
+# ScanWorker hands results to the GUI thread in batches rather than one signal
+# per file - on a large batch (~7k+ files) a per-file signal plus per-file table
+# writes and a progress-bar tick starved the event loop and froze the window.
+# The batch is a fraction of the total file count (clamped) so feedback stays
+# frequent on small scans and doesn't explode on huge ones.
+RESULTS_BATCH_FRACTION = 0.05
+RESULTS_BATCH_MAX = 500
 # Resolves correctly both from source (relative to this file) and in a
 # Nuitka onefile build, where --include-data-files places it at this same
 # relative path inside the runtime extraction directory.
@@ -73,7 +79,7 @@ def _build_tooltip(occurrences, truncated):
 
 
 class ScanWorker(QThread):
-    result_ready = pyqtSignal(object)
+    results_ready = pyqtSignal(list)
     finished_scanning = pyqtSignal()
 
     def __init__(self, keywords, file_names, mode=MatchMode.SUBSTRING, parent=None):
@@ -86,6 +92,14 @@ class ScanWorker(QThread):
     def run(self):
         worker_count = min(cpu_count(), len(self.file_names))
         scan = partial(scan_files_process, self.keywords, mode=self.mode)
+        batch_size = min(RESULTS_BATCH_MAX, max(1, int(len(self.file_names) * RESULTS_BATCH_FRACTION)))
+        batch = []
+
+        def flush():
+            if batch:
+                self.results_ready.emit(batch.copy())
+                batch.clear()
+
         # 'spawn' (not the platform-default 'fork' on Linux) avoids worker
         # processes inheriting this QThread's/QApplication's state, which
         # otherwise deadlocks pool shutdown when a Pool is created from a
@@ -95,9 +109,12 @@ class ScanWorker(QThread):
             self._pool = pool
             try:
                 for result in pool.imap_unordered(scan, self.file_names):
-                    self.result_ready.emit(result)
+                    batch.append(result)
+                    if len(batch) >= batch_size:
+                        flush()
             except Exception:  # noqa: BLE001, S110 - a cancel-triggered pool.terminate() surfaces here
                 pass
+        flush()  # emit whatever completed, including on a cancel
         self.finished_scanning.emit()
 
     def cancel(self):
@@ -443,12 +460,23 @@ class FileScanner(QMainWindow):
         self.progress_dialog.setMinimumDuration(0)
         self.progress_dialog.setValue(0)
         self.scan_worker = ScanWorker(keywords, list(self.file_names), mode, self)
-        self.scan_worker.result_ready.connect(self.handle_scan_result)
+        self.scan_worker.results_ready.connect(self.handle_scan_batch)
         self.scan_worker.finished_scanning.connect(self.handle_scan_finished)
         self.progress_dialog.canceled.connect(self.scan_worker.cancel)
         self.scan_worker.start()
 
-    def handle_scan_result(self, result: ScanResult):
+    def handle_scan_batch(self, results: list):
+        # One updates-disabled block + one progress tick per batch, rather than
+        # per file - a per-file signal storm froze the window on large scans.
+        self.files.setUpdatesEnabled(False)
+        try:
+            for result in results:
+                self._apply_scan_result(result)
+        finally:
+            self.files.setUpdatesEnabled(True)
+        self.progress_dialog.setValue(self.progress_dialog.value() + len(results))
+
+    def _apply_scan_result(self, result: ScanResult):
         row = self.file_items[result.file].row()
         if result.error is not None:
             self.scan_errors.append((result.file, result.error))
@@ -465,7 +493,6 @@ class FileScanner(QMainWindow):
                 if has_match:
                     widget.setToolTip(_build_tooltip(result.occurrences[i], result.truncated[i]))
                 self.files.setItem(row, i + 1, widget)
-        self.progress_dialog.setValue(self.progress_dialog.value() + 1)
 
     def handle_scan_finished(self):
         self.progress_dialog.close()
@@ -474,6 +501,7 @@ class FileScanner(QMainWindow):
         self.export_results.setDisabled(False)
         self.export_excel.setDisabled(False)
         self.files.setSortingEnabled(True)
+        self.files.resizeColumnsToContents()
         self._apply_filter()
         if self.scan_errors:
             details = '\n'.join(f'{basename(file)}: {error}' for file, error in self.scan_errors)
@@ -558,6 +586,7 @@ class FileScanner(QMainWindow):
             self.files.setItem(i + count, 0, item)
             self.file_items[file] = item
         self.files.setSortingEnabled(was_sorting)
+        self.files.resizeColumnsToContents()
         self.update_scan_button_state()
         self._apply_filter()
 
@@ -658,14 +687,13 @@ class FileScanner(QMainWindow):
 
     def update_file_headers(self):
         self.file_headers = ['File'] + [self.keyword_list.item(i).text() for i in range(self.keyword_list.count())]
-        old_columns = self.files.columnCount()
-        len_headers = len(self.file_headers)
-        self.files.setColumnCount(len_headers)
+        self.files.setColumnCount(len(self.file_headers))
         self.files.setHorizontalHeaderLabels(self.file_headers)
-        if old_columns < len_headers:
-            header = self.files.horizontalHeader()
-            for i in range(old_columns, len_headers):
-                header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        # Columns stay Interactive (the default): a per-column ResizeToContents
+        # mode re-measures the whole column on every setItem, which is O(rows) per
+        # cell write and froze the window mid-scan on large batches. Instead we
+        # size columns once after bulk changes (see _add_files /
+        # handle_scan_finished).
 
     def remove_keyword_clicked(self):
         for item in self.keyword_list.selectedIndexes()[::-1]:
